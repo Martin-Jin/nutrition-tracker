@@ -113,7 +113,8 @@ function showView(name){
   window.scrollTo(0,0);
   if(name === 'requirements') renderRequirementsTable();
   if(name === 'catalogue') renderCatalogueTable();
-  if(name === 'profile'){ renderProfileMatch(); renderMacroPie(); }
+  if(name === 'profile') renderProfileMatch();
+  if(name === 'landing'){ renderHeroCard(); renderMacroPie(); }
 }
 
 // ============================================================================
@@ -477,7 +478,7 @@ function clearSelection(){
 // distinct-food variety) to surface multiple genuinely distinct solutions,
 // per spec ("show them all as a list").
 
-function buildLPModel(selectedNames, targets, uls, objectiveType){
+function buildLPModel(selectedNames, targets, uls, objectiveType, calorieTarget){
   const variables = {};
   const constraints = {};
 
@@ -493,6 +494,15 @@ function buildLPModel(selectedNames, targets, uls, objectiveType){
     }
   });
 
+  // Calorie target isn't a DRI nutrient row -- it's estimated from the
+  // profile (Mifflin-St Jeor) -- so it's constrained separately here rather
+  // than through the TRACKABLE_KEYS loop above. Only enforced when a profile
+  // estimate exists; without one there's nothing to band against.
+  if(calorieTarget){
+    constraints.min_kcal = { min: calorieTarget * 0.9 };
+    constraints.max_kcal = { max: calorieTarget * 1.1 };
+  }
+
   selectedNames.forEach(name => {
     const food = FOODS.find(f => f.name === name);
     const varDef = { total_grams: 1 };
@@ -502,6 +512,11 @@ function buildLPModel(selectedNames, targets, uls, objectiveType){
       varDef[`max_${key}`] = perGram;
     });
     varDef.kcal_obj = (food.kcal || 0) / 100;
+    if(calorieTarget){
+      const kcalPerGram = (food.kcal || 0) / 100;
+      varDef.min_kcal = kcalPerGram;
+      varDef.max_kcal = kcalPerGram;
+    }
     variables[name] = varDef;
   });
 
@@ -528,6 +543,24 @@ function computeTotalsFromUsage(usage){
 
 function solutionSignature(usage){
   return Object.entries(usage).filter(([,g]) => g > 0.5).map(([n,g]) => `${n}:${Math.round(g)}`).sort().join('|');
+}
+
+// Two solutions count as "the same combination" (not worth showing both) when
+// they use the same set of foods and every food's gram amount is within 20%
+// of the other solution's amount for that food. A differing food set is
+// always a genuinely distinct combination regardless of gram closeness.
+function solutionsAreSimilar(usageA, usageB, threshold = 0.2){
+  const namesA = Object.keys(usageA).filter(n => usageA[n] > 0.5).sort();
+  const namesB = Object.keys(usageB).filter(n => usageB[n] > 0.5).sort();
+  if(namesA.length !== namesB.length) return false;
+  for(let i = 0; i < namesA.length; i++){
+    if(namesA[i] !== namesB[i]) return false;
+  }
+  return namesA.every(name => {
+    const gA = usageA[name], gB = usageB[name];
+    const denom = Math.max(gA, gB);
+    return denom === 0 || Math.abs(gA - gB) / denom <= threshold;
+  });
 }
 
 function setCalcTab(tab){
@@ -558,13 +591,18 @@ function runCalculation(){
     return;
   }
 
+  // Weight/height/age in the profile drive a maintenance-calorie estimate;
+  // without them there's no sane band to enforce, so kcal goes unconstrained
+  // (buildLPModel treats a falsy calorieTarget as "don't constrain kcal").
+  const calorieTarget = estimateCalorieTarget(state.profile);
+
   // Try a few objectives to surface multiple distinct feasible solutions.
   const objectives = ['grams', 'kcal'];
   const solutions = [];
   const seen = new Set();
 
   objectives.forEach(obj => {
-    const model = buildLPModel(names, targets, uls, obj);
+    const model = buildLPModel(names, targets, uls, obj, calorieTarget);
     let result;
     try{
       result = window.solver.Solve(model);
@@ -588,7 +626,7 @@ function runCalculation(){
     for(let i = 0; i < names.length && solutions.length < 8; i++){
       const subset = names.filter((_, idx) => idx !== i);
       if(subset.length === 0) continue;
-      const model = buildLPModel(subset, targets, uls, 'grams');
+      const model = buildLPModel(subset, targets, uls, 'grams', calorieTarget);
       let result;
       try{ result = window.solver.Solve(model); } catch(e){ continue; }
       if(!result || !result.feasible) continue;
@@ -603,29 +641,49 @@ function runCalculation(){
   }
 
   if(solutions.length > 0){
-    renderSuccessResults(solutions, targets, uls);
+    // Solutions found under different objectives/subsets can still land on
+    // essentially the same combination (same foods, gram amounts a few
+    // percent apart) -- collapse those before showing the list.
+    const distinctSolutions = [];
+    solutions.forEach(sol => {
+      const dupe = distinctSolutions.some(kept => solutionsAreSimilar(kept.usage, sol.usage));
+      if(!dupe) distinctSolutions.push(sol);
+    });
+    renderSuccessResults(distinctSolutions, targets, uls, calorieTarget);
     return;
   }
 
   // Infeasible: solve the "use everything you have, minimize shortfall"
   // relaxation to report best-effort coverage, then rank gap-filling foods.
-  renderInfeasibleResults(names, targets, uls);
+  renderInfeasibleResults(names, targets, uls, calorieTarget);
 }
 
-function renderSuccessResults(solutions, targets, uls){
+function renderSuccessResults(solutions, targets, uls, calorieTarget){
   const panel = document.getElementById('resultsPanel');
   let html = `<h3 style="margin-bottom:14px;">✓ ${solutions.length} combination${solutions.length>1?'s':''} that meet${solutions.length>1?'':'s'} all your daily targets</h3>`;
+  if(!calorieTarget){
+    html += `<div class="field-hint" style="margin-bottom:14px;">Enter your weight, height and age in your profile to also enforce a maintenance-calorie band (90%–110%) on these combinations.</div>`;
+  }
   solutions.forEach((sol, idx) => {
     const items = Object.entries(sol.usage).filter(([,g]) => g > 0.5);
+    const maxGrams = Math.max(...items.map(([,g]) => g), 1);
+    const badgeLabel = calorieTarget ? 'meets all targets, incl. calories (90%–110% band)' : 'meets all targets (90%–110% band)';
     html += `<div class="combo-card status-full">
       <div class="combo-title">
         <span>Combination ${idx+1}</span>
-        <span class="combo-badge badge-full">meets all targets (90%–110% band)</span>
+        <span class="combo-badge badge-full">${badgeLabel}</span>
       </div>
       <div class="combo-items">
-        ${items.map(([name, g]) => `<div><span class="qty">${Math.round(g)} g</span> — ${name}</div>`).join('')}
+        ${items.map(([name, g]) => {
+          const pct = Math.max((g / maxGrams) * 100, 2);
+          return `<div class="combo-item-row">
+            <span class="combo-item-name">${name}</span>
+            <span class="combo-item-track"><span class="combo-item-fill" style="width:${pct}%"></span></span>
+            <span class="combo-item-qty">${Math.round(g)} g</span>
+          </div>`;
+        }).join('')}
       </div>
-      <div style="margin-top:12px; font-size:12px; color:var(--ink-soft);">Total: ${Math.round(sol.totals.kcal)} kcal</div>
+      <div style="margin-top:12px; font-size:12px; color:var(--ink-soft);">Total: ${Math.round(sol.totals.kcal)} kcal${calorieTarget ? ` (target ${Math.round(calorieTarget)} kcal)` : ''}</div>
     </div>`;
   });
   panel.innerHTML = html;
@@ -638,8 +696,8 @@ function renderSuccessResults(solutions, targets, uls){
 // fall back to now that foods are unbounded, so an infeasible result here
 // means the selected foods' nutrient ratios can never satisfy every target
 // simultaneously, not that the user doesn't have enough of something.
-function bestEffortUsage(names, targets, uls){
-  const model = buildLPModel(names, targets, uls, 'grams');
+function bestEffortUsage(names, targets, uls, calorieTarget){
+  const model = buildLPModel(names, targets, uls, 'grams', calorieTarget);
   // Relax every min_/max_ constraint so the LP always has a feasible point,
   // then re-solve minimizing total grams -- this yields *a* point, not
   // necessarily the closest one, but with the floors still present as soft
@@ -655,9 +713,9 @@ function bestEffortUsage(names, targets, uls){
   return usage;
 }
 
-function renderInfeasibleResults(names, targets, uls){
+function renderInfeasibleResults(names, targets, uls, calorieTarget){
   const panel = document.getElementById('resultsPanel');
-  const usage = bestEffortUsage(names, targets, uls);
+  const usage = bestEffortUsage(names, targets, uls, calorieTarget);
   const totals = computeTotalsFromUsage(usage);
 
   const gaps = {};
@@ -684,6 +742,16 @@ function renderInfeasibleResults(names, targets, uls){
     </div>`;
 
   html += `<div style="margin-top:10px;">`;
+  if(calorieTarget){
+    const havekcal = totals.kcal || 0;
+    const pctKcal = Math.min(999, Math.round((havekcal/calorieTarget)*100));
+    const barClassKcal = pctKcal > 110 ? 'over' : (pctKcal >= 90 ? '' : 'under');
+    html += `<div class="nutrient-bar-row">
+      <div class="nutrient-bar-label">Calories</div>
+      <div class="nutrient-bar-track"><div class="nutrient-bar-fill ${barClassKcal}" style="width:${Math.min(100,pctKcal)}%"></div></div>
+      <div class="nutrient-bar-pct">${pctKcal}%</div>
+    </div>`;
+  }
   TRACKABLE_KEYS.forEach(k => {
     const target = targets[k];
     if(target === null || target === undefined) return;
