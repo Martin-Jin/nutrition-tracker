@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Harvest Ledger — Personal Nutrition Planner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Public+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="brand" onclick="showView('landing')">
+    <span class="brand-mark">Harvest Ledger</span>
+    <span class="brand-sub">NUTRIENT PLANNER</span>
+  </div>
+  <div class="navlinks">
+    <button class="navlink" data-view="landing" onclick="showView('landing')">Home</button>
+    <button class="navlink" data-view="calculator" onclick="showView('calculator')">Calculator</button>
+    <button class="navlink" data-view="catalogue" onclick="showView('catalogue')">Food Catalogue</button>
+    <button class="navlink" data-view="requirements" onclick="showView('requirements')">Requirements</button>
+    <button class="navlink" data-view="profile" onclick="showView('profile')">My Profile</button>
+  </div>
+</nav>
+
+<!-- ================= LANDING ================= -->
+<div id="landing" class="view active">
+  <div class="hero">
+    <div class="hero-left">
+      <div class="hero-eyebrow">DAILY NUTRIENT PLANNING, FROM WHAT'S IN YOUR KITCHEN</div>
+      <h1>Know exactly what to eat from what you already have.</h1>
+      <p class="lede">Set your personal nutrient targets once. Then tell us what's in your fridge — we'll work out every combination that gets you to a complete day of macro and micronutrients, and what's missing when it can't.</p>
+      <div class="hero-ctas">
+        <button class="btn btn-primary" onclick="showView('calculator')">Start calculating →</button>
+        <button class="btn btn-secondary" onclick="showView('catalogue')">Browse the catalogue</button>
+      </div>
+      <div class="hero-stats" id="landingStats">
+        <div>
+          <div class="stat-num" id="statFoods">—</div>
+          <div class="stat-label">foods catalogued</div>
+        </div>
+        <div>
+          <div class="stat-num" id="statNutrients">—</div>
+          <div class="stat-label">tracked nutrients</div>
+        </div>
+        <div>
+          <div class="stat-num" id="statStages">—</div>
+          <div class="stat-label">life-stage targets</div>
+        </div>
+      </div>
+    </div>
+    <div class="hero-right">
+      <div class="hero-card-title" id="heroCardTitle">TODAY'S TARGET</div>
+      <div id="heroNutrientRows"></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-head">
+      <div>
+        <h2>Three tools, one ledger</h2>
+        <p>Everything pulls from the same underlying nutrient data, so your targets and your food choices stay in sync.</p>
+      </div>
+    </div>
+    <div class="feature-grid">
+      <div class="feature">
+        <div class="feature-num">01</div>
+        <h3>Requirement lookup</h3>
+        <p>Official RDA/AI values by age, sex, pregnancy and lactation status, sourced from NASEM/IOM DRI Summary Tables.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-num">02</div>
+        <h3>Combination solver</h3>
+        <p>Pick what's on hand. We surface every gram combination that satisfies your day — or tell you plainly what's short.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-num">03</div>
+        <h3>Gap-filling suggestions</h3>
+        <p>When nothing fits, see foods ranked by how much of each missing nutrient they'd contribute.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-head">
+      <div>
+        <h2>The catalogue</h2>
+        <p>Every entry lists 25+ nutrients per 100g, sourced and cited from USDA FoodData Central.</p>
+      </div>
+    </div>
+    <div class="category-strip" id="landingCatStrip"></div>
+  </div>
+
+  <div class="footer-cta">
+    <h2>Enter your details once. Plan every day after.</h2>
+    <div class="hero-ctas" style="margin-top:22px;">
+      <button class="btn btn-primary" onclick="showView('profile')">Set up my profile →</button>
+    </div>
+  </div>
+
+  <div class="source-note">
+    Nutrient requirements: National Academies of Sciences, Engineering and Medicine (NASEM/IOM) Dietary Reference Intakes, Summary Tables — <a href="https://www.ncbi.nlm.nih.gov/books/NBK545442/" target="_blank" rel="noopener">NCBI Bookshelf</a>. Food nutrient values: USDA FoodData Central, SR Legacy — every catalogue entry links its own source record. This tool is for general planning purposes only and does not replace advice from a registered dietitian or physician.
+  </div>
+</div>
+
+<!-- ================= CALCULATOR ================= -->
+<div id="calculator" class="view">
+  <div class="page-head">
+    <h1>What can I make today?</h1>
+    <p>Select the foods you have available, enter how much of each (grams), and we'll check every combination against your daily targets.</p>
+  </div>
+
+  <div class="calc-grid">
+    <div class="panel food-picker">
+      <h3>Available foods</h3>
+      <input type="text" class="food-search" id="calcFoodSearch" placeholder="Search foods…" oninput="renderFoodPicker()">
+      <div id="foodPickerList"></div>
+    </div>
+
+    <div>
+      <div class="panel selected-panel">
+        <h3>Selected foods &amp; quantity on hand</h3>
+        <div id="selectedFoodsList">
+          <div class="empty-state">No foods selected yet. Choose from the list on the left.</div>
+        </div>
+        <div class="calc-actions">
+          <button class="btn btn-primary" onclick="runCalculation()">Calculate combinations →</button>
+          <button class="btn btn-secondary" onclick="clearSelection()">Clear all</button>
+        </div>
+      </div>
+
+      <div id="resultsPanel" class="result-block"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= CATALOGUE ================= -->
+<div id="catalogue" class="view">
+  <div class="page-head">
+    <h1>Food catalogue</h1>
+    <p>Per-100g nutrient values for every food in the database. Search, filter by category, click a row for the full breakdown, or edit/disable an entry.</p>
+  </div>
+
+  <div class="cat-toolbar">
+    <div class="autocomplete-wrap">
+      <input type="text" class="food-search" id="catalogueSearch" placeholder="Search by food name…" oninput="onCatalogueSearchInput()" onkeydown="onCatalogueSearchKeydown(event)" autocomplete="off">
+      <div class="autocomplete-results" id="catalogueAutocomplete"></div>
+    </div>
+    <button class="cat-filter-btn active" data-cat="all" onclick="setCatalogueFilter('all')">All</button>
+    <button class="cat-filter-btn" data-cat="Meats" onclick="setCatalogueFilter('Meats')">Meats</button>
+    <button class="cat-filter-btn" data-cat="Vegetables" onclick="setCatalogueFilter('Vegetables')">Vegetables</button>
+    <button class="cat-filter-btn" data-cat="Fruits" onclick="setCatalogueFilter('Fruits')">Fruits</button>
+    <button class="cat-filter-btn" data-cat="Nuts" onclick="setCatalogueFilter('Nuts')">Nuts</button>
+    <span style="flex:1 1 auto;"></span>
+    <button class="cat-filter-btn cat-filter-action" onclick="enableAllFoods()">Enable all</button>
+    <button class="cat-filter-btn cat-filter-action" onclick="openAddFoodModal()">+ Add custom food</button>
+  </div>
+
+  <div class="table-scroll">
+    <table class="data-table" id="catalogueTable">
+      <thead>
+        <tr>
+          <th>Food</th><th>Category</th><th>kcal</th><th>Protein g</th><th>Carb g</th><th>Fiber g</th><th>Fat g</th>
+          <th>Calcium mg</th><th>Iron mg</th><th>Potassium mg</th><th>Vit C mg</th><th>Vit A µg</th><th>Source</th><th>Enabled</th>
+        </tr>
+      </thead>
+      <tbody id="catalogueTbody"></tbody>
+    </table>
+  </div>
+  <div class="field-hint" style="margin-top:10px;">Disabling a food keeps it in the catalogue but excludes it from the calculator's combination solver.</div>
+</div>
+
+<div class="food-detail-modal-bg" id="foodModalBg" onclick="if(event.target===this) closeFoodModal()">
+  <div class="food-detail-modal" id="foodModalContent"></div>
+</div>
+
+<!-- ================= REQUIREMENTS ================= -->
+<div id="requirements" class="view">
+  <div class="page-head">
+    <h1>Nutritional requirements</h1>
+    <p>Official Dietary Reference Intakes by life stage. Your personal target column updates based on your profile — edit any cell here to override it for your own use.</p>
+  </div>
+
+  <div class="panel">
+    <h3>Your current targets — <span id="reqLifeStageLabel">—</span></h3>
+    <div class="table-scroll" style="max-height:640px;">
+      <table class="data-table" id="reqTable">
+        <thead>
+          <tr><th>Nutrient</th><th>Category</th><th>Unit</th><th>Type</th><th>Your Target</th><th>Life-stage reference</th><th>Band</th></tr>
+        </thead>
+        <tbody id="reqTbody"></tbody>
+      </table>
+    </div>
+  </div>
+  <div class="panel" id="notTrackedPanel" style="display:none;">
+    <h3>Not tracked by the solver</h3>
+    <p class="field-hint" style="margin-bottom:10px;">USDA FoodData Central does not measure these nutrients in foods, so no combination could ever include them — they're excluded from the solver's pass/fail check and shown here for reference only.</p>
+    <div id="notTrackedList"></div>
+  </div>
+  <div class="source-note" style="padding:20px 0 0;">
+    Source: NASEM/IOM DRI Summary Tables (see data/dri_sources.md for exact table citations). Edited values are stored only in this browser and used for the calculator on this device.
+  </div>
+</div>
+
+<!-- ================= PROFILE ================= -->
+<div id="profile" class="view">
+  <div class="page-head">
+    <h1>My profile</h1>
+    <p>Used to look up your personal nutrient targets. Nothing here is sent anywhere — it stays in this browser.</p>
+  </div>
+
+  <div class="panel" style="max-width:560px;">
+    <h3>Personal details</h3>
+    <div class="field-row">
+      <label for="pAge">Age (years)</label>
+      <div><input type="number" id="pAge" min="0" max="120" value="30"><div class="field-hint">Whole number</div></div>
+    </div>
+    <div class="field-row">
+      <label for="pSex">Sex / life stage</label>
+      <div>
+        <select id="pSex">
+          <option value="male">Male</option>
+          <option value="female">Female</option>
+          <option value="pregnant">Pregnant</option>
+          <option value="lactating">Lactating</option>
+        </select>
+      </div>
+    </div>
+    <div class="field-row">
+      <label for="pWeight">Weight (kg)</label>
+      <div><input type="number" id="pWeight" min="0" value="70"><div class="field-hint">Used for protein sanity check (0.8 g/kg)</div></div>
+    </div>
+    <div class="field-row">
+      <label for="pHeight">Height (cm)</label>
+      <div><input type="number" id="pHeight" min="0" value="175"><div class="field-hint">Optional, reference only</div></div>
+    </div>
+    <div class="field-row">
+      <label for="pActivity">Activity level</label>
+      <div>
+        <select id="pActivity">
+          <option value="sedentary">Sedentary</option>
+          <option value="light">Light</option>
+          <option value="moderate" selected>Moderate</option>
+          <option value="active">Active</option>
+          <option value="very_active">Very active</option>
+        </select>
+      </div>
+    </div>
+    <div class="calc-actions">
+      <button class="btn btn-primary" onclick="saveProfile()">Save profile →</button>
+    </div>
+  </div>
+
+  <div class="panel" style="max-width:560px;">
+    <h3>Matched life stage</h3>
+    <div id="profileMatchedStage" style="font-size:14px; color:var(--ink-soft);">—</div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/javascript-lp-solver@0.4.24/prod/solver.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
