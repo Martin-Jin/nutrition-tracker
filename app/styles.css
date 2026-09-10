@@ -208,8 +208,20 @@ input,select{font-family:inherit;}
 .combo-badge{font-size:11px; padding:3px 9px; border-radius:12px; font-family:'JetBrains Mono',monospace;}
 .badge-full{background:#E4F3E8; color:var(--ok);}
 .badge-partial{background:#FBEEDD; color:var(--warn);}
-.combo-items{font-size:13px; color:var(--ink-soft); line-height:1.7;}
+.combo-items{font-size:13px; color:var(--ink-soft);}
 .combo-items .qty{color:var(--forest); font-weight:600; font-family:'JetBrains Mono',monospace;}
+
+.combo-item-row{display:flex; align-items:center; gap:10px; padding:5px 0; font-size:13px;}
+.combo-item-name{flex:1; min-width:0; color:var(--ink-soft); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.combo-item-track{width:120px; flex-shrink:0; height:7px; background:var(--paper-dim); border-radius:4px; overflow:hidden;}
+.combo-item-fill{display:block; height:100%; background:var(--forest); border-radius:4px;}
+.combo-item-qty{width:70px; flex-shrink:0; text-align:right; color:var(--forest); font-weight:600; font-family:'JetBrains Mono',monospace;}
+@media (max-width:640px){
+  .combo-item-row{flex-wrap:wrap;}
+  .combo-item-name{width:100%; white-space:normal;}
+  .combo-item-track{order:3; width:100%; flex:1 1 auto;}
+  .combo-item-qty{order:2; margin-left:auto;}
+}
 
 .nutrient-bar-row{display:flex; align-items:center; gap:10px; padding:4px 0; font-size:12px;}
 .nutrient-bar-label{width:120px; color:var(--ink-soft); flex-shrink:0;}

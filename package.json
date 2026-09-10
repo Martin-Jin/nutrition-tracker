@@ -1,0 +1,24 @@
+{
+  "name": "nutrition-calculator",
+  "version": "1.0.0",
+  "description": "A personal nutrition planning tool: a DRI (Dietary Reference Intake)\r requirements workbook, a USDA-sourced food catalogue, and a static\r HTML/JS/CSS web app that solves for which combinations of on-hand foods meet\r daily nutrient targets.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Martin-Jin/nutrition-tracker.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Martin-Jin/nutrition-tracker/issues"
+  },
+  "homepage": "https://github.com/Martin-Jin/nutrition-tracker#readme",
+  "devDependencies": {
+    "playwright": "^1.63.0"
+  }
+}
