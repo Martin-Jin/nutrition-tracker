@@ -113,7 +113,24 @@ function showView(name){
   window.scrollTo(0,0);
   if(name === 'requirements') renderRequirementsTable();
   if(name === 'catalogue') renderCatalogueTable();
-  if(name === 'profile') renderProfileMatch();
+  if(name === 'profile'){ renderProfileMatch(); renderMacroPie(); }
+}
+
+// ============================================================================
+// TOAST (transient button-press feedback)
+// ============================================================================
+function showToast(message, { error = false } = {}){
+  const container = document.getElementById('toastContainer');
+  if(!container) return;
+  const el = document.createElement('div');
+  el.className = 'toast' + (error ? ' toast-error' : '');
+  el.textContent = message;
+  container.appendChild(el);
+  requestAnimationFrame(() => el.classList.add('toast-visible'));
+  setTimeout(() => {
+    el.classList.remove('toast-visible');
+    setTimeout(() => el.remove(), 250);
+  }, 2200);
 }
 
 // ============================================================================
@@ -163,6 +180,8 @@ function saveProfile(){
   saveState();
   renderProfileMatch();
   renderHeroCard();
+  renderMacroPie();
+  showToast('Profile saved');
 }
 
 function renderProfileMatch(){
@@ -271,17 +290,37 @@ function svgPieChart(slices, { size = 120, donut = true, holeRatio = 0.55 } = {}
   return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">${paths}${hole}</svg>`;
 }
 
+const ACTIVITY_FACTORS = {
+  sedentary: 1.2, light: 1.375, moderate: 1.55, active: 1.725, very_active: 1.9,
+};
+
+// Mifflin-St Jeor BMR, scaled by activity factor. Returns null if weight/height/age
+// are missing or zero -- there is no sane fallback estimate to show instead.
+function estimateCalorieTarget(profile){
+  const { weight, height, age, sex, activity } = profile;
+  if(!weight || !height || !age) return null;
+  const sexOffset = (sex === 'female' || sex === 'pregnant' || sex === 'lactating') ? -161 : 5;
+  const bmr = 10 * weight + 6.25 * height - 5 * age + sexOffset;
+  const factor = ACTIVITY_FACTORS[activity] || ACTIVITY_FACTORS.moderate;
+  return bmr * factor;
+}
+
 function renderMacroPie(){
   const el = document.getElementById('macroPieChart');
   if(!el) return;
   const { targets } = getTargets();
-  const p = targets.protein_g || 0, c = targets.carb_g || 0, f = targets.fat_g || 0;
-  const kcalP = p * 4, kcalC = c * 4, kcalF = f * 9;
-  const totalKcal = kcalP + kcalC + kcalF;
-  if(totalKcal <= 0){
-    el.innerHTML = '<div class="field-hint">Set up your profile to see your macro split.</div>';
+  const calorieTarget = estimateCalorieTarget(state.profile);
+  if(!calorieTarget){
+    el.innerHTML = '<div class="field-hint">Enter your weight, height and age in your profile to see your macro split and calorie target.</div>';
     return;
   }
+  const p = targets.protein_g || 0, c = targets.carb_g || 0;
+  const kcalP = p * 4, kcalC = c * 4;
+  // Fat has no fixed DRI gram target for adults (AMDR is a % range, not an
+  // RDA/AI) -- see fat_g in dri.json. Deriving it as the remainder keeps the
+  // three slices summing to the actual estimated calorie target instead of
+  // silently treating the missing fat value as 0.
+  const kcalF = Math.max(0, calorieTarget - kcalP - kcalC);
   const slices = [
     { label: 'Protein', value: kcalP, color: 'var(--forest)' },
     { label: 'Carbohydrate', value: kcalC, color: 'var(--gold)' },
@@ -291,8 +330,8 @@ function renderMacroPie(){
     <div class="pie-chart-row pie-chart-row-centered">
       ${svgPieChart(slices, { size: 220 })}
       <div class="pie-legend">
-        ${slices.map(s => `<div class="pie-legend-row"><span class="pie-swatch" style="background:${s.color}"></span>${s.label} <span class="pie-legend-pct">${Math.round(s.value/totalKcal*100)}%</span></div>`).join('')}
-        <div class="pie-legend-total">${Math.round(totalKcal)} kcal/day target</div>
+        ${slices.map(s => `<div class="pie-legend-row"><span class="pie-swatch" style="background:${s.color}"></span>${s.label} <span class="pie-legend-pct">${Math.round(s.value/calorieTarget*100)}%</span></div>`).join('')}
+        <div class="pie-legend-total">${Math.round(calorieTarget)} kcal/day estimated target</div>
       </div>
     </div>`;
 }
@@ -302,8 +341,7 @@ function renderHeroCard(){
   const title = document.getElementById('heroCardTitle');
   if(stage) title.textContent = `TODAY'S TARGET — ${stage.label.toUpperCase()}`;
   const rows = document.getElementById('heroNutrientRows');
-  const highlight = ['protein_g','fiber_g','iron_mg','calcium_mg','vitC_mg','vitB12_ug','potassium_mg'];
-  rows.innerHTML = highlight.filter(k => DRI.nutrients[k]).map(k => {
+  rows.innerHTML = TRACKABLE_KEYS.map(k => {
     const nd = DRI.nutrients[k];
     const val = targets[k];
     return `<div class="hero-nutrient-row"><span class="n">${nd.label}</span><span class="v">${fmtVal(val)} ${DISPLAY_UNIT[k]||''}</span></div>`;
@@ -414,7 +452,7 @@ function renderSelectedFoods(){
   container.innerHTML = names.map(name => {
     return `<div class="selected-food-row">
       <div class="name">${name}</div>
-      <button class="remove-btn" onclick="toggleFood('${escName(name)}', false)" title="Remove">✕</button>
+      <button class="remove-btn" onclick="toggleFood('${escName(name)}', false)" title="Remove" aria-label="Remove ${name}">✕</button>
     </div>`;
   }).join('');
 }
@@ -916,13 +954,19 @@ document.addEventListener('click', (e) => {
   }
 });
 
+document.addEventListener('keydown', (e) => {
+  if(e.key === 'Escape' && document.getElementById('foodModalBg').classList.contains('show')){
+    closeFoodModal();
+  }
+});
+
 // ---- food detail modal: view, edit, disable, source link ----
 function openFoodModal(name){
   const f = FOODS.find(x => x.name === name);
   if(!f) return;
   const content = document.getElementById('foodModalContent');
   content.innerHTML = `
-    <button class="modal-close" onclick="closeFoodModal()">✕</button>
+    <button class="modal-close" onclick="closeFoodModal()" aria-label="Close">✕</button>
     <h3>${f.name}</h3>
     <div class="fd-cat">${f.category} · per 100g ${f.enabled ? '' : '· <span style="color:var(--bad)">disabled</span>'}</div>
     <div class="fd-grid">
@@ -948,7 +992,7 @@ function openEditFoodModal(name){
   if(!f) return;
   const content = document.getElementById('foodModalContent');
   content.innerHTML = `
-    <button class="modal-close" onclick="closeFoodModal()">✕</button>
+    <button class="modal-close" onclick="closeFoodModal()" aria-label="Close">✕</button>
     <h3>Edit — ${f.name}</h3>
     <div class="fd-cat">${f.category} · per 100g</div>
     <div class="fd-edit-grid">
@@ -980,6 +1024,7 @@ function saveEditedFood(name){
 }
 
 function deleteCustomFood(name){
+  if(!confirm(`Delete "${name}"? This cannot be undone.`)) return;
   state.customFoods = state.customFoods.filter(f => f.name !== name);
   delete state.editedFoods[name];
   delete state.disabledFoods[name];
@@ -992,7 +1037,7 @@ function deleteCustomFood(name){
 function openAddFoodModal(){
   const content = document.getElementById('foodModalContent');
   content.innerHTML = `
-    <button class="modal-close" onclick="closeFoodModal()">✕</button>
+    <button class="modal-close" onclick="closeFoodModal()" aria-label="Close">✕</button>
     <h3>Add a custom food</h3>
     <div class="field-row"><label>Name</label><input type="text" id="newFoodName" placeholder="e.g. Homemade granola"></div>
     <div class="field-row"><label>Category</label>
@@ -1017,8 +1062,8 @@ function openAddFoodModal(){
 
 function saveNewFood(){
   const name = document.getElementById('newFoodName').value.trim();
-  if(!name){ alert('Please enter a food name.'); return; }
-  if(FOODS.some(f => f.name === name)){ alert('A food with that name already exists.'); return; }
+  if(!name){ showToast('Please enter a food name.', { error: true }); return; }
+  if(FOODS.some(f => f.name === name)){ showToast('A food with that name already exists.', { error: true }); return; }
   const category = document.getElementById('newFoodCategory').value;
   const inputs = document.querySelectorAll('#foodModalContent input[data-key]');
   const food = { name, category, isCustom: true, source_url: null, source_name: null };

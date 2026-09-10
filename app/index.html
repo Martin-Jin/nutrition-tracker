@@ -59,16 +59,6 @@
   <div class="section">
     <div class="section-head">
       <div>
-        <h2>Your daily macro split</h2>
-        <p>Protein, carbohydrate and fat as a share of your daily calorie target, based on your DRI targets (4 kcal/g protein &amp; carb, 9 kcal/g fat).</p>
-      </div>
-    </div>
-    <div class="panel" id="macroPieChart"></div>
-  </div>
-
-  <div class="section">
-    <div class="section-head">
-      <div>
         <h2>Three tools, one ledger</h2>
         <p>Everything pulls from the same underlying nutrient data, so your targets and your food choices stay in sync.</p>
       </div>
@@ -263,16 +253,16 @@
       <label for="pActivity">Activity level</label>
       <div>
         <select id="pActivity">
-          <option value="sedentary">Sedentary</option>
-          <option value="light">Light</option>
-          <option value="moderate" selected>Moderate</option>
-          <option value="active">Active</option>
-          <option value="very_active">Very active</option>
+          <option value="sedentary">Sedentary (little/no exercise)</option>
+          <option value="light">Light (1-3 days/week)</option>
+          <option value="moderate" selected>Moderate (3-5 days/week)</option>
+          <option value="active">Active (6-7 days/week)</option>
+          <option value="very_active">Very active (physical job or 2x/day)</option>
         </select>
       </div>
     </div>
     <div class="calc-actions">
-      <button class="btn btn-primary" onclick="saveProfile()">Save profile →</button>
+      <button class="btn btn-primary" id="saveProfileBtn" onclick="saveProfile()">Save profile →</button>
     </div>
   </div>
 
@@ -280,7 +270,19 @@
     <h3>Matched life stage</h3>
     <div id="profileMatchedStage" style="font-size:14px; color:var(--ink-soft);">—</div>
   </div>
+
+  <div class="section">
+    <div class="section-head">
+      <div>
+        <h2>Your daily macro split</h2>
+        <p>Protein and carbohydrate come from your DRI targets (4 kcal/g each); fat is the remaining share of your estimated calorie target, based on weight, height, age, sex and activity level (Mifflin-St Jeor).</p>
+      </div>
+    </div>
+    <div class="panel" id="macroPieChart"></div>
+  </div>
 </div>
+
+<div id="toastContainer" class="toast-container" aria-live="polite"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/javascript-lp-solver@0.4.24/prod/solver.js"></script>
 <script src="app.js"></script>
