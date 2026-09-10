@@ -33,9 +33,10 @@ let state = {
   selectedFoods: {}, // name -> { grams }
   catalogueFilter: 'all',
   overrides: {},      // nutrient key -> overridden target value
-  disabledFoods: {},  // name -> true (excluded from solver, still visible in catalogue)
+  disabledFoods: {},  // name -> true (excluded from solver AND hidden from the calculator's food picker)
   customFoods: [],    // user-added foods, same shape as FOODS entries
   editedFoods: {},    // name -> partial food object overriding fetched values
+  simplifyCategories: false, // when true, catalogue + calculator show one flat list instead of grouping by Meats/Vegetables/Fruits/Nuts
 };
 
 // ============================================================================
@@ -51,6 +52,7 @@ function saveState(){
       disabledFoods: state.disabledFoods,
       customFoods: state.customFoods,
       editedFoods: state.editedFoods,
+      simplifyCategories: state.simplifyCategories,
     };
     localStorage.setItem(LS_KEY, JSON.stringify(toSave));
   }catch(e){
@@ -68,6 +70,7 @@ function loadState(){
     if(parsed.disabledFoods) state.disabledFoods = parsed.disabledFoods;
     if(parsed.customFoods) state.customFoods = parsed.customFoods;
     if(parsed.editedFoods) state.editedFoods = parsed.editedFoods;
+    if(typeof parsed.simplifyCategories === 'boolean') state.simplifyCategories = parsed.simplifyCategories;
   }catch(e){
     console.warn('localStorage load failed', e);
   }
@@ -279,26 +282,31 @@ function renderLandingCatStrip(){
 function renderFoodPicker(){
   const q = (document.getElementById('calcFoodSearch').value || '').toLowerCase();
   const list = document.getElementById('foodPickerList');
-  const byCat = {};
-  FOODS.forEach(f => {
-    if(q && !foodMatchesQuery(f, q)) return;
-    (byCat[f.category] = byCat[f.category] || []).push(f);
-  });
+  // Foods disabled in the catalogue are not just unselectable here, they're
+  // not shown at all -- what's enabled in the catalogue is exactly what's
+  // available in the calculator, with nothing left to "re-enable" per view.
+  const available = FOODS.filter(f => f.enabled && (!q || foodMatchesQuery(f, q)));
+
+  const renderItem = (f) => {
+    const checked = state.selectedFoods[f.name] ? 'checked' : '';
+    const sel = state.selectedFoods[f.name] ? 'selected' : '';
+    return `<label class="food-item ${sel}">
+      <input type="checkbox" ${checked} onchange="toggleFood('${escName(f.name)}', this.checked)">
+      <span>${f.name}</span>
+    </label>`;
+  };
+
   let html = '';
-  Object.keys(byCat).forEach(cat => {
-    html += `<div class="food-cat-label">${cat}</div>`;
-    byCat[cat].forEach(f => {
-      const checked = state.selectedFoods[f.name] ? 'checked' : '';
-      const sel = state.selectedFoods[f.name] ? 'selected' : '';
-      const disabledCls = f.enabled ? '' : 'disabled-food';
-      const disabledAttr = f.enabled ? '' : 'disabled';
-      html += `<label class="food-item ${sel} ${disabledCls}">
-        <input type="checkbox" ${checked} ${disabledAttr} onchange="toggleFood('${escName(f.name)}', this.checked)">
-        <span>${f.name}</span>
-        ${f.enabled ? '' : '<span class="disabled-tag">disabled</span>'}
-      </label>`;
+  if(state.simplifyCategories){
+    html = available.map(renderItem).join('');
+  } else {
+    const byCat = {};
+    available.forEach(f => (byCat[f.category] = byCat[f.category] || []).push(f));
+    Object.keys(byCat).forEach(cat => {
+      html += `<div class="food-cat-label">${cat}</div>`;
+      html += byCat[cat].map(renderItem).join('');
     });
-  });
+  }
   list.innerHTML = html || '<div class="field-hint">No foods match your search.</div>';
 }
 
@@ -598,12 +606,14 @@ function setCatalogueFilter(cat){
 function renderCatalogueTable(){
   const tbody = document.getElementById('catalogueTbody');
   const q = (document.getElementById('catalogueSearch').value || '').toLowerCase();
-  let list = FOODS.filter(f => state.catalogueFilter === 'all' || f.category === state.catalogueFilter);
+  const simplified = state.simplifyCategories;
+  let list = simplified ? FOODS.slice() : FOODS.filter(f => state.catalogueFilter === 'all' || f.category === state.catalogueFilter);
   if(q) list = list.filter(f => foodMatchesQuery(f, q));
+  const colspan = simplified ? 13 : 14;
   tbody.innerHTML = list.map(f => `
     <tr class="${f.enabled ? '' : 'row-disabled'}">
       <td onclick="openFoodModal('${escName(f.name)}')" style="cursor:pointer;"><strong>${f.name}</strong></td>
-      <td>${f.category}</td>
+      ${simplified ? '' : `<td>${f.category}</td>`}
       <td class="mono">${fmtVal(f.kcal)}</td>
       <td class="mono">${fmtVal(f.protein_g)}</td>
       <td class="mono">${fmtVal(f.carb_g)}</td>
@@ -617,7 +627,21 @@ function renderCatalogueTable(){
       <td>${f.source_url ? `<a href="${f.source_url}" target="_blank" rel="noopener" onclick="event.stopPropagation()">USDA</a>` : '—'}</td>
       <td><input type="checkbox" ${f.enabled ? 'checked' : ''} onclick="event.stopPropagation()" onchange="toggleFoodEnabled('${escName(f.name)}', this.checked)"></td>
     </tr>
-  `).join('') || `<tr><td colspan="14" style="text-align:center; padding:30px; color:var(--ink-soft);">No foods match.</td></tr>`;
+  `).join('') || `<tr><td colspan="${colspan}" style="text-align:center; padding:30px; color:var(--ink-soft);">No foods match.</td></tr>`;
+
+  // category filter pills and the table's Category header are meaningless
+  // once categories are hidden from the row data -- toggle them together.
+  document.querySelectorAll('.cat-filter-btn[data-cat]').forEach(b => { b.hidden = simplified; });
+  const catHeader = document.getElementById('catalogueCategoryHeader');
+  if(catHeader) catHeader.hidden = simplified;
+}
+
+function onSimplifyCategoriesChange(checked){
+  state.simplifyCategories = checked;
+  if(checked) state.catalogueFilter = 'all';
+  saveState();
+  renderCatalogueTable();
+  renderFoodPicker();
 }
 
 function toggleFoodEnabled(name, checked){
@@ -908,6 +932,7 @@ async function init(){
   document.getElementById('pWeight').value = state.profile.weight;
   document.getElementById('pHeight').value = state.profile.height;
   document.getElementById('pActivity').value = state.profile.activity;
+  document.getElementById('simplifyCategoriesToggle').checked = state.simplifyCategories;
 
   renderFoodPicker();
   renderSelectedFoods();

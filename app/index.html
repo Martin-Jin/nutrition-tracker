@@ -157,11 +157,16 @@
     <button class="cat-filter-btn cat-filter-action" onclick="openAddFoodModal()">+ Add custom food</button>
   </div>
 
+  <label class="settings-toggle-row">
+    <input type="checkbox" id="simplifyCategoriesToggle" onchange="onSimplifyCategoriesChange(this.checked)">
+    <span>Simplify: show one flat food list instead of grouping by Meats / Vegetables / Fruits / Nuts</span>
+  </label>
+
   <div class="table-scroll">
     <table class="data-table" id="catalogueTable">
       <thead>
         <tr>
-          <th>Food</th><th>Category</th><th>kcal</th><th>Protein g</th><th>Carb g</th><th>Fiber g</th><th>Fat g</th>
+          <th>Food</th><th id="catalogueCategoryHeader">Category</th><th>kcal</th><th>Protein g</th><th>Carb g</th><th>Fiber g</th><th>Fat g</th>
           <th>Calcium mg</th><th>Iron mg</th><th>Potassium mg</th><th>Vit C mg</th><th>Vit A µg</th><th>Source</th><th>Enabled</th>
         </tr>
       </thead>
