@@ -45,7 +45,7 @@ NUTRIENT_MAP = {
     "Iron, Fe": ("iron_mg", "MG"),
     "Zinc, Zn": ("zinc_mg", "MG"),
     "Selenium, Se": ("selenium_ug", "UG"),
-    "Copper, Cu": ("copper_ug", "UG"),  # FDC reports mg; convert below
+    "Copper, Cu": ("copper_ug", "MG"),  # FDC reports mg; convert to ug below
     "Manganese, Mn": ("manganese_mg", "MG"),
     "Vitamin A, RAE": ("vitA_ug", "UG"),
     "Vitamin D (D2 + D3)": ("vitD_ug", "UG"),
