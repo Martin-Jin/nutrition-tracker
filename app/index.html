@@ -66,16 +66,6 @@
     <div class="panel" id="macroPieChart"></div>
   </div>
 
-  <div class="section" id="nutrientDonutSection" style="display:none;">
-    <div class="section-head">
-      <div>
-        <h2>Coverage from your selected foods</h2>
-        <p>How much of each daily target your current calculator selection provides. Update your selection on the Calculator page to change this.</p>
-      </div>
-    </div>
-    <div class="panel nutrient-donut-grid" id="nutrientDonutGrid"></div>
-  </div>
-
   <div class="section">
     <div class="section-head">
       <div>
@@ -128,30 +118,39 @@
 <div id="calculator" class="view">
   <div class="page-head">
     <h1>What can I make today?</h1>
-    <p>Select the foods you have available, enter how much of each (grams), and we'll check every combination against your daily targets.</p>
+    <p>Select the foods you have available and we'll calculate the optimal amount of each to meet your daily targets.</p>
   </div>
 
-  <div class="calc-grid">
-    <div class="panel food-picker">
-      <h3>Available foods <button class="btn btn-secondary btn-sm" onclick="selectAllFoods()">Select all</button></h3>
-      <input type="text" class="food-search" id="calcFoodSearch" placeholder="Search foods…" oninput="renderFoodPicker()">
-      <div id="foodPickerList"></div>
-    </div>
+  <div class="calc-tabs">
+    <button class="calc-tab active" data-calctab="select" onclick="setCalcTab('select')">Select foods</button>
+    <button class="calc-tab" data-calctab="results" onclick="setCalcTab('results')">Results</button>
+  </div>
 
-    <div>
-      <div class="panel selected-panel">
-        <h3>Selected foods &amp; quantity on hand</h3>
-        <div id="selectedFoodsList">
-          <div class="empty-state">No foods selected yet. Choose from the list on the left.</div>
-        </div>
-        <div class="calc-actions">
-          <button class="btn btn-primary" onclick="runCalculation()">Calculate combinations →</button>
-          <button class="btn btn-secondary" onclick="clearSelection()">Clear all</button>
-        </div>
+  <div class="calc-tabpanel active" id="calcTabSelect">
+    <div class="calc-grid">
+      <div class="panel food-picker">
+        <h3>Available foods <button class="btn btn-secondary btn-sm" onclick="selectAllFoods()">Select all</button></h3>
+        <input type="text" class="food-search" id="calcFoodSearch" placeholder="Search foods…" oninput="renderFoodPicker()">
+        <div id="foodPickerList"></div>
       </div>
 
-      <div id="resultsPanel" class="result-block"></div>
+      <div>
+        <div class="panel selected-panel">
+          <h3>Selected foods</h3>
+          <div id="selectedFoodsList">
+            <div class="empty-state">No foods selected yet. Choose from the list on the left.</div>
+          </div>
+          <div class="calc-actions">
+            <button class="btn btn-primary" onclick="runCalculation()">Calculate combinations →</button>
+            <button class="btn btn-secondary" onclick="clearSelection()">Clear all</button>
+          </div>
+        </div>
+      </div>
     </div>
+  </div>
+
+  <div class="calc-tabpanel" id="calcTabResults">
+    <div id="resultsPanel" class="result-block"></div>
   </div>
 </div>
 

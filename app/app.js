@@ -288,50 +288,13 @@ function renderMacroPie(){
     { label: 'Fat', value: kcalF, color: 'var(--brick)' },
   ];
   el.innerHTML = `
-    <div class="pie-chart-row">
-      ${svgPieChart(slices, { size: 130 })}
+    <div class="pie-chart-row pie-chart-row-centered">
+      ${svgPieChart(slices, { size: 220 })}
       <div class="pie-legend">
         ${slices.map(s => `<div class="pie-legend-row"><span class="pie-swatch" style="background:${s.color}"></span>${s.label} <span class="pie-legend-pct">${Math.round(s.value/totalKcal*100)}%</span></div>`).join('')}
         <div class="pie-legend-total">${Math.round(totalKcal)} kcal/day target</div>
       </div>
     </div>`;
-}
-
-function renderNutrientDonuts(){
-  const section = document.getElementById('nutrientDonutSection');
-  const grid = document.getElementById('nutrientDonutGrid');
-  if(!section || !grid) return;
-  const names = Object.keys(state.selectedFoods).filter(name => {
-    const food = FOODS.find(f => f.name === name);
-    return food && food.enabled;
-  });
-  if(names.length === 0){
-    section.style.display = 'none';
-    return;
-  }
-  section.style.display = '';
-  const { targets } = getTargets();
-  const usage = {};
-  names.forEach(name => usage[name] = state.selectedFoods[name].grams);
-  const totals = computeTotalsFromUsage(usage);
-
-  grid.innerHTML = TRACKABLE_KEYS.filter(k => targets[k] !== null && targets[k] !== undefined && targets[k] > 0).map(k => {
-    const nd = DRI.nutrients[k];
-    const have = totals[k] || 0;
-    const target = targets[k];
-    const pct = Math.min(100, Math.round((have/target)*100));
-    const remaining = Math.max(0, 100 - pct);
-    const color = pct >= 90 ? 'var(--ok)' : (pct >= 50 ? 'var(--gold)' : 'var(--brick)');
-    const slices = [
-      { label: 'Covered', value: pct, color },
-      { label: 'Remaining', value: remaining, color: 'var(--paper-dim)' },
-    ];
-    return `<div class="nutrient-donut-card">
-      ${svgPieChart(slices, { size: 88 })}
-      <div class="nutrient-donut-label">${nd.label}</div>
-      <div class="nutrient-donut-pct">${pct}%</div>
-    </div>`;
-  }).join('');
 }
 
 function renderHeroCard(){
@@ -412,36 +375,33 @@ function escName(name){ return name.replace(/'/g, "\\'"); }
 function selectAllFoods(){
   const q = (document.getElementById('calcFoodSearch').value || '').toLowerCase();
   FOODS.filter(f => f.enabled && (!q || foodMatchesQuery(f, q))).forEach(f => {
-    state.selectedFoods[f.name] = state.selectedFoods[f.name] || { grams: 100 };
+    state.selectedFoods[f.name] = state.selectedFoods[f.name] || {};
   });
   renderFoodPicker();
   renderSelectedFoods();
-  renderNutrientDonuts();
 }
 
 function toggleCategorySelection(category, checked){
   const q = (document.getElementById('calcFoodSearch').value || '').toLowerCase();
   FOODS.filter(f => f.enabled && f.category === category && (!q || foodMatchesQuery(f, q))).forEach(f => {
     if(checked){
-      state.selectedFoods[f.name] = state.selectedFoods[f.name] || { grams: 100 };
+      state.selectedFoods[f.name] = state.selectedFoods[f.name] || {};
     } else {
       delete state.selectedFoods[f.name];
     }
   });
   renderFoodPicker();
   renderSelectedFoods();
-  renderNutrientDonuts();
 }
 
 function toggleFood(name, checked){
   if(checked){
-    state.selectedFoods[name] = { grams: 100 };
+    state.selectedFoods[name] = {};
   } else {
     delete state.selectedFoods[name];
   }
   renderFoodPicker();
   renderSelectedFoods();
-  renderNutrientDonuts();
 }
 
 function renderSelectedFoods(){
@@ -452,37 +412,32 @@ function renderSelectedFoods(){
     return;
   }
   container.innerHTML = names.map(name => {
-    const item = state.selectedFoods[name];
     return `<div class="selected-food-row">
       <div class="name">${name}</div>
-      <input type="number" min="0" step="1" value="${item.grams}" onchange="updateGrams('${escName(name)}', this.value)">
       <button class="remove-btn" onclick="toggleFood('${escName(name)}', false)" title="Remove">✕</button>
     </div>`;
   }).join('');
-}
-
-function updateGrams(name, grams){
-  if(state.selectedFoods[name]) state.selectedFoods[name].grams = parseFloat(grams) || 0;
 }
 
 function clearSelection(){
   state.selectedFoods = {};
   renderFoodPicker();
   renderSelectedFoods();
-  renderNutrientDonuts();
   document.getElementById('resultsPanel').innerHTML = '';
 }
 
 // ============================================================================
 // CALCULATOR: LP-based combination solver
 // ============================================================================
-// Each selected food is a continuous variable: grams used, bounded by
-// [0, gramsOnHand]. Constraints: for every trackable nutrient with a target,
-// floor_pct% * target <= sum(food_nutrient_per_g * grams) <= ceiling.
-// Ceiling is either an explicit UL (ul_value) or ceiling_pct% * target, else
-// unbounded. We solve the same LP with a few different objectives (minimize
-// total grams, minimize kcal, maximize distinct-food variety) to surface
-// multiple genuinely distinct solutions, per spec ("show them all as a list").
+// Each selected food is a continuous variable: grams used, bounded only by
+// [0, unbounded) -- foods are treated as purchasable in any amount, not
+// capped to what the user has on hand. Constraints: for every trackable
+// nutrient with a target, floor_pct% * target <= sum(food_nutrient_per_g *
+// grams) <= ceiling. Ceiling is either an explicit UL (ul_value) or
+// ceiling_pct% * target, else unbounded. We solve the same LP with a few
+// different objectives (minimize total grams, minimize kcal, maximize
+// distinct-food variety) to surface multiple genuinely distinct solutions,
+// per spec ("show them all as a list").
 
 function buildLPModel(selectedNames, targets, uls, objectiveType){
   const variables = {};
@@ -502,7 +457,6 @@ function buildLPModel(selectedNames, targets, uls, objectiveType){
 
   selectedNames.forEach(name => {
     const food = FOODS.find(f => f.name === name);
-    const onHand = state.selectedFoods[name].grams;
     const varDef = { total_grams: 1 };
     TRACKABLE_KEYS.forEach(key => {
       const perGram = (food[key] || 0) / 100;
@@ -511,8 +465,6 @@ function buildLPModel(selectedNames, targets, uls, objectiveType){
     });
     varDef.kcal_obj = (food.kcal || 0) / 100;
     variables[name] = varDef;
-    constraints[`cap_${name}`] = { max: onHand };
-    varDef[`cap_${name}`] = 1;
   });
 
   const model = {
@@ -540,12 +492,19 @@ function solutionSignature(usage){
   return Object.entries(usage).filter(([,g]) => g > 0.5).map(([n,g]) => `${n}:${Math.round(g)}`).sort().join('|');
 }
 
+function setCalcTab(tab){
+  document.querySelectorAll('.calc-tab').forEach(b => b.classList.toggle('active', b.dataset.calctab === tab));
+  document.getElementById('calcTabSelect').classList.toggle('active', tab === 'select');
+  document.getElementById('calcTabResults').classList.toggle('active', tab === 'results');
+}
+
 function runCalculation(){
   const names = Object.keys(state.selectedFoods).filter(name => {
     const food = FOODS.find(f => f.name === name);
     return food && food.enabled;
   });
   const resultsPanel = document.getElementById('resultsPanel');
+  setCalcTab('results');
   if(names.length === 0){
     resultsPanel.innerHTML = '<div class="empty-state">Select at least one enabled food first.</div>';
     return;
@@ -634,11 +593,33 @@ function renderSuccessResults(solutions, targets, uls){
   panel.innerHTML = html;
 }
 
+// Best-effort relaxation when no feasible combination exists: minimize total
+// grams while allowing each nutrient constraint to be violated, weighted so
+// the solver still prefers getting as close to every floor as it can. Used
+// only to report "how close can we get" -- there's no "amount on hand" to
+// fall back to now that foods are unbounded, so an infeasible result here
+// means the selected foods' nutrient ratios can never satisfy every target
+// simultaneously, not that the user doesn't have enough of something.
+function bestEffortUsage(names, targets, uls){
+  const model = buildLPModel(names, targets, uls, 'grams');
+  // Relax every min_/max_ constraint so the LP always has a feasible point,
+  // then re-solve minimizing total grams -- this yields *a* point, not
+  // necessarily the closest one, but with the floors still present as soft
+  // targets (via the original constraints made non-binding) it stays close
+  // in practice for the "still short on X" reporting this feeds.
+  Object.keys(model.constraints).forEach(cKey => {
+    if(cKey.startsWith('min_')) delete model.constraints[cKey].min;
+  });
+  let result;
+  try{ result = window.solver.Solve(model); }catch(e){ result = null; }
+  const usage = {};
+  names.forEach(name => { usage[name] = (result && result[name]) || 0; });
+  return usage;
+}
+
 function renderInfeasibleResults(names, targets, uls){
   const panel = document.getElementById('resultsPanel');
-  // Best-effort: use full amount of everything on hand, see how close we get.
-  const usage = {};
-  names.forEach(name => usage[name] = state.selectedFoods[name].grams);
+  const usage = bestEffortUsage(names, targets, uls);
   const totals = computeTotalsFromUsage(usage);
 
   const gaps = {};
@@ -661,7 +642,7 @@ function renderInfeasibleResults(names, targets, uls){
     <div class="combo-title"><span>No combination of your selected foods meets all daily targets</span>
     <span class="combo-badge badge-partial">partial coverage</span></div>
     <div style="font-size:13px; color:var(--ink-soft); margin-bottom:14px;">
-      Using everything you have on hand gets you closest — here's that coverage (target band: 90%–110%, or the published upper limit where one exists), plus what's still missing.
+      No amount of your selected foods can hit every target at once — here's the closest achievable coverage (target band: 90%–110%, or the published upper limit where one exists), plus what's still missing.
     </div>`;
 
   html += `<div style="margin-top:10px;">`;
@@ -1016,7 +997,7 @@ function openAddFoodModal(){
     <div class="field-row"><label>Name</label><input type="text" id="newFoodName" placeholder="e.g. Homemade granola"></div>
     <div class="field-row"><label>Category</label>
       <select id="newFoodCategory">
-        <option>Meats</option><option>Vegetables</option><option>Fruits</option><option>Nuts</option>
+        <option>Meats</option><option>Vegetables</option><option>Fruits</option><option>Nuts</option><option>Grains</option><option>Dairy</option>
       </select>
     </div>
     <div class="fd-edit-grid" style="margin-top:14px;">
@@ -1072,7 +1053,6 @@ async function init(){
   renderLandingStats();
   renderHeroCard();
   renderMacroPie();
-  renderNutrientDonuts();
 }
 
 init();

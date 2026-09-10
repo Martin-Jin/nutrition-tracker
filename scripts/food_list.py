@@ -4,8 +4,8 @@ Each entry: (category, search_query, preferred_description_substring or None).
 
 Search queries are run against the FDC search API; preferred_match narrows
 multiple hits to the plain/raw form we want (avoids canned/frozen/juice
-variants per the "common foods only" decision). Categories match the
-required set: Meats, Vegetables, Fruits, Nuts.
+variants per the "common foods only" decision). Categories: Meats,
+Vegetables, Fruits, Nuts, Grains, Dairy.
 """
 
 FOOD_QUERIES = [
@@ -91,4 +91,30 @@ FOOD_QUERIES = [
     ("Nuts", "pumpkin seeds raw", "Seeds, pumpkin and squash seed kernels, dried"),
     ("Nuts", "chia seeds raw", "Seeds, chia seeds, dried"),
     ("Nuts", "flaxseed raw", "Seeds, flaxseed"),
+
+    # ---- Grains ----
+    ("Grains", "white rice cooked", "Rice, white, long-grain, regular, cooked"),
+    ("Grains", "brown rice cooked", "Rice, brown, long-grain, cooked"),
+    ("Grains", "white bread", "Bread, white, commercially prepared"),
+    ("Grains", "whole wheat bread", "Bread, whole-wheat, commercially prepared"),
+    ("Grains", "cereals oats regular and quick dry", "Cereals, oats, regular and quick, not fortified, dry"),
+    ("Grains", "quinoa cooked", "Quinoa, cooked"),
+    ("Grains", "pasta cooked", "Pasta, cooked, enriched, without added salt"),
+    ("Grains", "whole wheat pasta cooked", "Pasta, whole-wheat, cooked"),
+    ("Grains", "couscous cooked", "Couscous, cooked"),
+    ("Grains", "barley pearled cooked", "Barley, pearled, cooked"),
+    ("Grains", "tortilla flour", "Tortillas, ready-to-bake or -fry, flour"),
+    ("Grains", "bagel plain", "Bagels, plain, enriched, with calcium propionate"),
+
+    # ---- Dairy ----
+    ("Dairy", "greek yogurt plain nonfat", "Yogurt, Greek, plain, nonfat"),
+    ("Dairy", "yogurt plain whole milk", "Yogurt, plain, whole milk"),
+    ("Dairy", "milk whole", "Milk, whole, 3.25% milkfat, with added vitamin D"),
+    ("Dairy", "milk skim", "Milk, nonfat, fluid, with added vitamin A and vitamin D (fat free or skim)"),
+    ("Dairy", "cheddar cheese", "Cheese, cheddar"),
+    ("Dairy", "mozzarella cheese", "Cheese, mozzarella, whole milk"),
+    ("Dairy", "cottage cheese", "Cheese, cottage, creamed, large or small curd"),
+    ("Dairy", "cream cheese", "Cheese, cream"),
+    ("Dairy", "butter salted", "Butter, salted"),
+    ("Dairy", "sour cream", "Cream, sour, cultured"),
 ]
