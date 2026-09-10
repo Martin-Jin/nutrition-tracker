@@ -59,6 +59,26 @@
   <div class="section">
     <div class="section-head">
       <div>
+        <h2>Your daily macro split</h2>
+        <p>Protein, carbohydrate and fat as a share of your daily calorie target, based on your DRI targets (4 kcal/g protein &amp; carb, 9 kcal/g fat).</p>
+      </div>
+    </div>
+    <div class="panel" id="macroPieChart"></div>
+  </div>
+
+  <div class="section" id="nutrientDonutSection" style="display:none;">
+    <div class="section-head">
+      <div>
+        <h2>Coverage from your selected foods</h2>
+        <p>How much of each daily target your current calculator selection provides. Update your selection on the Calculator page to change this.</p>
+      </div>
+    </div>
+    <div class="panel nutrient-donut-grid" id="nutrientDonutGrid"></div>
+  </div>
+
+  <div class="section">
+    <div class="section-head">
+      <div>
         <h2>Three tools, one ledger</h2>
         <p>Everything pulls from the same underlying nutrient data, so your targets and your food choices stay in sync.</p>
       </div>
@@ -113,7 +133,7 @@
 
   <div class="calc-grid">
     <div class="panel food-picker">
-      <h3>Available foods</h3>
+      <h3>Available foods <button class="btn btn-secondary btn-sm" onclick="selectAllFoods()">Select all</button></h3>
       <input type="text" class="food-search" id="calcFoodSearch" placeholder="Search foods…" oninput="renderFoodPicker()">
       <div id="foodPickerList"></div>
     </div>

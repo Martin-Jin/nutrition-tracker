@@ -243,6 +243,97 @@ function onOverrideChange(input){
 // ============================================================================
 // LANDING
 // ============================================================================
+
+// Plain SVG pie/donut, no charting library -- keeps the app dependency-free.
+// `slices` is [{label, value, color}]; values are normalized to the circle.
+function svgPieChart(slices, { size = 120, donut = true, holeRatio = 0.55 } = {}){
+  const total = slices.reduce((s, x) => s + x.value, 0);
+  const r = size / 2;
+  const cx = r, cy = r;
+  if(total <= 0){
+    return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}"><circle cx="${cx}" cy="${cy}" r="${r-1}" fill="none" stroke="var(--line-strong)" stroke-width="1"/></svg>`;
+  }
+  let angle = -Math.PI / 2;
+  const paths = slices.filter(s => s.value > 0).map(s => {
+    const frac = s.value / total;
+    const start = angle;
+    const end = angle + frac * Math.PI * 2;
+    angle = end;
+    const x1 = cx + r * Math.cos(start), y1 = cy + r * Math.sin(start);
+    const x2 = cx + r * Math.cos(end), y2 = cy + r * Math.sin(end);
+    const large = (end - start) > Math.PI ? 1 : 0;
+    if(frac >= 0.9999){
+      return `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${s.color}"><title>${s.label}: ${Math.round(frac*100)}%</title></circle>`;
+    }
+    return `<path d="M${cx},${cy} L${x1.toFixed(2)},${y1.toFixed(2)} A${r},${r} 0 ${large} 1 ${x2.toFixed(2)},${y2.toFixed(2)} Z" fill="${s.color}"><title>${s.label}: ${Math.round(frac*100)}%</title></path>`;
+  }).join('');
+  const hole = donut ? `<circle cx="${cx}" cy="${cy}" r="${r*holeRatio}" fill="var(--paper)"/>` : '';
+  return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">${paths}${hole}</svg>`;
+}
+
+function renderMacroPie(){
+  const el = document.getElementById('macroPieChart');
+  if(!el) return;
+  const { targets } = getTargets();
+  const p = targets.protein_g || 0, c = targets.carb_g || 0, f = targets.fat_g || 0;
+  const kcalP = p * 4, kcalC = c * 4, kcalF = f * 9;
+  const totalKcal = kcalP + kcalC + kcalF;
+  if(totalKcal <= 0){
+    el.innerHTML = '<div class="field-hint">Set up your profile to see your macro split.</div>';
+    return;
+  }
+  const slices = [
+    { label: 'Protein', value: kcalP, color: 'var(--forest)' },
+    { label: 'Carbohydrate', value: kcalC, color: 'var(--gold)' },
+    { label: 'Fat', value: kcalF, color: 'var(--brick)' },
+  ];
+  el.innerHTML = `
+    <div class="pie-chart-row">
+      ${svgPieChart(slices, { size: 130 })}
+      <div class="pie-legend">
+        ${slices.map(s => `<div class="pie-legend-row"><span class="pie-swatch" style="background:${s.color}"></span>${s.label} <span class="pie-legend-pct">${Math.round(s.value/totalKcal*100)}%</span></div>`).join('')}
+        <div class="pie-legend-total">${Math.round(totalKcal)} kcal/day target</div>
+      </div>
+    </div>`;
+}
+
+function renderNutrientDonuts(){
+  const section = document.getElementById('nutrientDonutSection');
+  const grid = document.getElementById('nutrientDonutGrid');
+  if(!section || !grid) return;
+  const names = Object.keys(state.selectedFoods).filter(name => {
+    const food = FOODS.find(f => f.name === name);
+    return food && food.enabled;
+  });
+  if(names.length === 0){
+    section.style.display = 'none';
+    return;
+  }
+  section.style.display = '';
+  const { targets } = getTargets();
+  const usage = {};
+  names.forEach(name => usage[name] = state.selectedFoods[name].grams);
+  const totals = computeTotalsFromUsage(usage);
+
+  grid.innerHTML = TRACKABLE_KEYS.filter(k => targets[k] !== null && targets[k] !== undefined && targets[k] > 0).map(k => {
+    const nd = DRI.nutrients[k];
+    const have = totals[k] || 0;
+    const target = targets[k];
+    const pct = Math.min(100, Math.round((have/target)*100));
+    const remaining = Math.max(0, 100 - pct);
+    const color = pct >= 90 ? 'var(--ok)' : (pct >= 50 ? 'var(--gold)' : 'var(--brick)');
+    const slices = [
+      { label: 'Covered', value: pct, color },
+      { label: 'Remaining', value: remaining, color: 'var(--paper-dim)' },
+    ];
+    return `<div class="nutrient-donut-card">
+      ${svgPieChart(slices, { size: 88 })}
+      <div class="nutrient-donut-label">${nd.label}</div>
+      <div class="nutrient-donut-pct">${pct}%</div>
+    </div>`;
+  }).join('');
+}
+
 function renderHeroCard(){
   const { stage, targets } = getTargets();
   const title = document.getElementById('heroCardTitle');
@@ -303,7 +394,13 @@ function renderFoodPicker(){
     const byCat = {};
     available.forEach(f => (byCat[f.category] = byCat[f.category] || []).push(f));
     Object.keys(byCat).forEach(cat => {
-      html += `<div class="food-cat-label">${cat}</div>`;
+      const allSelected = byCat[cat].every(f => state.selectedFoods[f.name]);
+      html += `<div class="food-cat-label">
+        <label class="cat-select-toggle" title="${allSelected ? 'Unselect' : 'Select'} all ${cat}">
+          <input type="checkbox" ${allSelected ? 'checked' : ''} onchange="toggleCategorySelection('${escName(cat)}', this.checked)">
+        </label>
+        <span>${cat}</span>
+      </div>`;
       html += byCat[cat].map(renderItem).join('');
     });
   }
@@ -311,6 +408,30 @@ function renderFoodPicker(){
 }
 
 function escName(name){ return name.replace(/'/g, "\\'"); }
+
+function selectAllFoods(){
+  const q = (document.getElementById('calcFoodSearch').value || '').toLowerCase();
+  FOODS.filter(f => f.enabled && (!q || foodMatchesQuery(f, q))).forEach(f => {
+    state.selectedFoods[f.name] = state.selectedFoods[f.name] || { grams: 100 };
+  });
+  renderFoodPicker();
+  renderSelectedFoods();
+  renderNutrientDonuts();
+}
+
+function toggleCategorySelection(category, checked){
+  const q = (document.getElementById('calcFoodSearch').value || '').toLowerCase();
+  FOODS.filter(f => f.enabled && f.category === category && (!q || foodMatchesQuery(f, q))).forEach(f => {
+    if(checked){
+      state.selectedFoods[f.name] = state.selectedFoods[f.name] || { grams: 100 };
+    } else {
+      delete state.selectedFoods[f.name];
+    }
+  });
+  renderFoodPicker();
+  renderSelectedFoods();
+  renderNutrientDonuts();
+}
 
 function toggleFood(name, checked){
   if(checked){
@@ -320,6 +441,7 @@ function toggleFood(name, checked){
   }
   renderFoodPicker();
   renderSelectedFoods();
+  renderNutrientDonuts();
 }
 
 function renderSelectedFoods(){
@@ -347,6 +469,7 @@ function clearSelection(){
   state.selectedFoods = {};
   renderFoodPicker();
   renderSelectedFoods();
+  renderNutrientDonuts();
   document.getElementById('resultsPanel').innerHTML = '';
 }
 
@@ -566,11 +689,20 @@ function renderInfeasibleResults(names, targets, uls){
     shortfalls.forEach(([k, gapAmt]) => {
       const nd = DRI.nutrients[k];
       const ranked = [...FOODS].filter(f => f.enabled).sort((a,b) => (b[k]||0) - (a[k]||0)).slice(0, 8);
+      const maxAmt = ranked.length ? (ranked[0][k] || 0) : 0;
       html += `<div class="missing-nutrient-block">
         <h4>${nd.label} <span style="font-weight:400; color:var(--ink-soft); font-size:12px;">— short by ${gapAmt.toFixed(1)} ${DISPLAY_UNIT[k]||''}</span></h4>
-        <ul class="missing-food-list">
-          ${ranked.map(f => `<li><span class="amt">${(f[k]??0)} ${DISPLAY_UNIT[k]||''}</span> per 100g — ${f.name} <span style="color:#9A947F">(${f.category})</span></li>`).join('')}
-        </ul>
+        <div class="ranked-food-list">
+          ${ranked.map(f => {
+            const amt = f[k] ?? 0;
+            const pct = maxAmt > 0 ? Math.max((amt / maxAmt) * 100, 2) : 0;
+            return `<div class="ranked-food-row">
+              <span class="ranked-food-name">${f.name} <span class="ranked-food-cat">(${f.category})</span></span>
+              <span class="ranked-food-track"><span class="ranked-food-fill" style="width:${pct}%"></span></span>
+              <span class="ranked-food-amt">${amt} ${DISPLAY_UNIT[k]||''}</span>
+            </div>`;
+          }).join('')}
+        </div>
       </div>`;
     });
     html += `</div>`;
@@ -939,6 +1071,8 @@ async function init(){
   renderLandingCatStrip();
   renderLandingStats();
   renderHeroCard();
+  renderMacroPie();
+  renderNutrientDonuts();
 }
 
 init();
