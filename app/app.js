@@ -39,6 +39,7 @@ let state = {
   simplifyVariants: false, // when true, only one representative per SIMPLIFY_GROUPS entry is usable; other variants in the group are hidden from the calculator
   categoryGramLimits: {}, // category name -> max grams per food in that category (solver upper bound); undefined = unbounded
   foodGramLimits: {},     // food name -> max grams, overrides the category default for that one food
+  nutrientBufferOverrides: {}, // nutrient key -> { floor_pct, ceiling_pct }, overrides dri.json's shipped default for that nutrient
 };
 
 // Curated groups of foods that are really the same product at different cuts/
@@ -96,6 +97,7 @@ function saveState(){
       simplifyVariants: state.simplifyVariants,
       categoryGramLimits: state.categoryGramLimits,
       foodGramLimits: state.foodGramLimits,
+      nutrientBufferOverrides: state.nutrientBufferOverrides,
     };
     localStorage.setItem(LS_KEY, JSON.stringify(toSave));
   }catch(e){
@@ -117,6 +119,7 @@ function loadState(){
     if(typeof parsed.simplifyVariants === 'boolean') state.simplifyVariants = parsed.simplifyVariants;
     if(parsed.categoryGramLimits) state.categoryGramLimits = parsed.categoryGramLimits;
     if(parsed.foodGramLimits) state.foodGramLimits = parsed.foodGramLimits;
+    if(parsed.nutrientBufferOverrides) state.nutrientBufferOverrides = parsed.nutrientBufferOverrides;
   }catch(e){
     console.warn('localStorage load failed', e);
   }
@@ -158,6 +161,23 @@ function resolveGramLimit(food){
     return isNaN(n) ? null : n;
   }
   return null;
+}
+
+// Resolves the floor/ceiling percent band the solver should enforce for one
+// nutrient: a user override (set in the Settings tab) always wins; otherwise
+// dri.json's shipped default (see each nutrient's floor_pct/ceiling_pct and,
+// for macros, the AMDR-informed comment explaining the wider default band).
+// Nutrients with a real UL/CDRR always keep that as their hard ceiling
+// regardless of ceiling_pct -- this only resolves the percent-of-target band
+// used when no UL/CDRR applies, or as the floor either way.
+function resolveNutrientBuffer(key){
+  const nd = DRI.nutrients[key];
+  const override = state.nutrientBufferOverrides[key];
+  const floor_pct = (override && override.floor_pct !== undefined && override.floor_pct !== null && override.floor_pct !== '')
+    ? parseFloat(override.floor_pct) : (nd.floor_pct ?? 90);
+  const ceiling_pct = (override && override.ceiling_pct !== undefined && override.ceiling_pct !== null && override.ceiling_pct !== '')
+    ? parseFloat(override.ceiling_pct) : (nd.ceiling_pct ?? null);
+  return { floor_pct: isNaN(floor_pct) ? (nd.floor_pct ?? 90) : floor_pct, ceiling_pct: (ceiling_pct !== null && isNaN(ceiling_pct)) ? (nd.ceiling_pct ?? null) : ceiling_pct };
 }
 
 async function loadData(){
@@ -293,8 +313,14 @@ function renderRequirementsTable(){
     const tr = document.createElement('tr');
     tr.className = 'dri-editable-row';
     const catTag = `<span class="tag tag-${nd.category}">${nd.category}</span>`;
-    const floor = nd.floor_pct ?? 90;
-    const ceil = uls[key] !== undefined ? `UL ${uls[key]}` : (nd.ceiling_pct ? `${nd.ceiling_pct}%` : '—');
+    const { floor_pct: floor, ceiling_pct: ceilPct } = resolveNutrientBuffer(key);
+    // Sodium's ceiling is a CDRR (Chronic Disease Risk Reduction Intake) --
+    // NASEM's 2019 DRI report found insufficient evidence for a true
+    // toxicological UL for sodium and used cardiovascular/blood-pressure
+    // outcome evidence instead. Labeling it the same as iron/vitamin A's UL
+    // (acute-toxicity-based) would overstate what the sodium ceiling means.
+    const ceilLabel = nd.ul_type === 'CDRR' ? 'CDRR' : 'UL';
+    const ceil = uls[key] !== undefined ? `${ceilLabel} ${uls[key]}` : (ceilPct ? `${ceilPct}%` : '—');
     tr.innerHTML = `
       <td>${nd.label}</td>
       <td>${catTag}</td>
@@ -627,10 +653,10 @@ function buildLPModel(selectedNames, targets, uls, objectiveType, calorieTarget)
   TRACKABLE_KEYS.forEach(key => {
     const target = targets[key];
     if(target === null || target === undefined) return;
-    const nd = DRI.nutrients[key];
-    const floorPct = (nd.floor_pct ?? 90) / 100;
+    const { floor_pct, ceiling_pct } = resolveNutrientBuffer(key);
+    const floorPct = floor_pct / 100;
     constraints[`min_${key}`] = { min: target * floorPct };
-    const ceilVal = uls[key] !== undefined ? uls[key] : (nd.ceiling_pct ? target * (nd.ceiling_pct/100) : null);
+    const ceilVal = uls[key] !== undefined ? uls[key] : (ceiling_pct ? target * (ceiling_pct/100) : null);
     if(ceilVal !== null && ceilVal !== undefined){
       constraints[`max_${key}`] = { max: ceilVal };
     }
@@ -725,7 +751,7 @@ function setCalcTab(tab){
   document.getElementById('calcTabSelect').classList.toggle('active', tab === 'select');
   document.getElementById('calcTabSettings').classList.toggle('active', tab === 'settings');
   document.getElementById('calcTabResults').classList.toggle('active', tab === 'results');
-  if(tab === 'settings'){ renderCategoryLimitsList(); renderFoodLimitsList(); }
+  if(tab === 'settings'){ renderCategoryLimitsList(); renderFoodLimitsList(); renderNutrientBufferList(); }
 }
 
 // ============================================================================
@@ -781,6 +807,54 @@ function onFoodLimitChange(name, value){
   if(value === ''){ delete state.foodGramLimits[name]; }
   else { state.foodGramLimits[name] = value; }
   saveState();
+}
+
+// Short per-nutrient note explaining WHY its default buffer is what it is,
+// shown next to the override inputs -- without this the widened macro
+// buffers (70-150%) look arbitrary next to everything else's 90-110%.
+const NUTRIENT_BUFFER_NOTES = {
+  protein_g: 'AMDR (10–35% of energy, NASEM) reflects broad tolerance for total protein intake — wider default than a micronutrient floor.',
+  carb_g: 'AMDR (45–65% of energy, NASEM) reflects broad tolerance for total carbohydrate intake — wider default than a micronutrient floor.',
+  fat_g: 'AMDR (20–35% of energy, NASEM) reflects broad tolerance for total fat intake — wider default than a micronutrient floor.',
+  sodium_mg: "Ceiling here is the CDRR (Chronic Disease Risk Reduction Intake), based on cardiovascular/blood-pressure outcome evidence — NASEM's 2019 DRI report found insufficient evidence for a toxicological UL for sodium.",
+};
+
+function renderNutrientBufferList(){
+  const container = document.getElementById('nutrientBufferList');
+  if(!container || !DRI) return;
+  container.innerHTML = TRACKABLE_KEYS.map(key => {
+    const nd = DRI.nutrients[key];
+    const override = state.nutrientBufferOverrides[key] || {};
+    const note = NUTRIENT_BUFFER_NOTES[key];
+    const hasUl = Object.values(nd.ul_value || {}).some(v => v !== null && v !== undefined);
+    return `<div class="field-row">
+      <label>${nd.label}${hasUl ? ` <span class="field-hint" style="display:block;">has a ${nd.ul_type === 'CDRR' ? 'CDRR' : 'UL'} — always kept as the hard ceiling regardless of this setting</span>` : ''}${note ? `<span class="field-hint" style="display:block;">${note}</span>` : ''}</label>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <input type="number" min="0" max="100" step="any" placeholder="${nd.floor_pct ?? 90}" value="${override.floor_pct ?? ''}"
+          style="width:70px;" title="Floor %" onchange="onNutrientBufferChange('${escName(key)}', 'floor_pct', this.value)">
+        <span class="field-hint">floor%</span>
+        <input type="number" min="100" step="any" placeholder="${nd.ceiling_pct ?? '—'}" value="${override.ceiling_pct ?? ''}"
+          style="width:70px;" title="Ceiling %" ${hasUl ? 'disabled' : ''} onchange="onNutrientBufferChange('${escName(key)}', 'ceiling_pct', this.value)">
+        <span class="field-hint">ceiling%</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function onNutrientBufferChange(key, field, value){
+  const entry = state.nutrientBufferOverrides[key] || {};
+  if(value === ''){ delete entry[field]; }
+  else { entry[field] = value; }
+  if(Object.keys(entry).length === 0){ delete state.nutrientBufferOverrides[key]; }
+  else { state.nutrientBufferOverrides[key] = entry; }
+  saveState();
+}
+
+function resetNutrientBuffers(){
+  state.nutrientBufferOverrides = {};
+  saveState();
+  renderNutrientBufferList();
+  showToast('Nutrient buffers reset to defaults');
 }
 
 function runCalculation(){
@@ -980,8 +1054,7 @@ function buildCoverageModel(names, targets, uls, calorieTarget){
   TRACKABLE_KEYS.forEach(key => {
     const target = targets[key];
     if(target === null || target === undefined) return;
-    const nd = DRI.nutrients[key];
-    const floor = target * ((nd.floor_pct ?? 90) / 100);
+    const floor = target * (resolveNutrientBuffer(key).floor_pct / 100);
     if(!floor) return;
     // link_<key>: (per-gram contribution summed over foods) - floor*cov_<key> = 0,
     // i.e. cov_<key> = actual/floor once solved -- expressed as an equality
@@ -1025,8 +1098,7 @@ function averageCoverage(totals, targets){
   TRACKABLE_KEYS.forEach(key => {
     const target = targets[key];
     if(target === null || target === undefined) return;
-    const nd = DRI.nutrients[key];
-    const floor = target * ((nd.floor_pct ?? 90) / 100);
+    const floor = target * (resolveNutrientBuffer(key).floor_pct / 100);
     if(!floor) return;
     count++;
     sum += Math.min((totals[key] || 0) / floor, 1);
@@ -1080,9 +1152,9 @@ function computeGaps(totals, targets, uls){
   TRACKABLE_KEYS.forEach(k => {
     const target = targets[k];
     if(target === null || target === undefined) return;
-    const nd = DRI.nutrients[k];
-    const floor = target * ((nd.floor_pct ?? 90)/100);
-    const ceil = uls[k] !== undefined ? uls[k] : (nd.ceiling_pct ? target*(nd.ceiling_pct/100) : null);
+    const { floor_pct, ceiling_pct } = resolveNutrientBuffer(k);
+    const floor = target * (floor_pct/100);
+    const ceil = uls[k] !== undefined ? uls[k] : (ceiling_pct ? target*(ceiling_pct/100) : null);
     const have = totals[k] || 0;
     if(have + 1e-9 < floor){
       gaps[k] = floor - have;
@@ -1108,7 +1180,7 @@ function renderInfeasibleResults(names, targets, uls, calorieTarget){
 
   let html = `<h3 style="margin-bottom:6px;">No combination meets all your daily targets — closest ${combos.length > 1 ? `${combos.length} combinations` : 'combination'} by coverage</h3>
     <div style="font-size:13px; color:var(--ink-soft); margin-bottom:14px;">
-      Ranked by average coverage across all tracked nutrients (target band: 90%–110%, or the published upper limit where one exists). Hover a combination to see its own nutrient breakdown.
+      Ranked by average coverage across all tracked nutrients (each nutrient's own floor/ceiling — see Settings for the buffer used, or the published upper limit where one exists). Hover a combination to see its own nutrient breakdown.
     </div>`;
 
   combos.forEach((combo, idx) => {
@@ -1154,7 +1226,7 @@ function renderInfeasibleResults(names, targets, uls, calorieTarget){
       const have = totals[k] || 0;
       const pct = Math.min(999, Math.round((have/target)*100));
       const over = gaps[k] !== undefined && gaps[k] < 0;
-      const barClass = over ? 'over' : (pct >= 90 ? '' : 'under');
+      const barClass = over ? 'over' : (pct >= resolveNutrientBuffer(k).floor_pct ? '' : 'under');
       html += `<div class="nutrient-bar-row">
         <div class="nutrient-bar-label">${DRI.nutrients[k].label}</div>
         <div class="nutrient-bar-track"><div class="nutrient-bar-fill ${barClass}" style="width:${Math.min(100,pct)}%"></div></div>
@@ -1180,7 +1252,7 @@ function renderInfeasibleResults(names, targets, uls, calorieTarget){
 
   if(shortfalls.length > 0){
     html += `<div class="missing-section"><h3>Foods ranked by missing nutrient</h3>
-      <p style="font-size:13px; color:var(--ink-soft); margin-bottom:20px;">For each nutrient you're still short on (below the 90% floor), foods from the full catalogue ranked highest-to-lowest by content per 100g. Disabled foods are excluded.</p>`;
+      <p style="font-size:13px; color:var(--ink-soft); margin-bottom:20px;">For each nutrient you're still short on (below its own floor — see Settings for the buffer used), foods from the full catalogue ranked highest-to-lowest by content per 100g. Disabled foods are excluded.</p>`;
     shortfalls.forEach(([k, gapAmt]) => {
       const nd = DRI.nutrients[k];
       const ranked = [...FOODS].filter(f => f.enabled && !f.hiddenByVariant).sort((a,b) => (b[k]||0) - (a[k]||0)).slice(0, 8);
@@ -1578,6 +1650,7 @@ async function init(){
   renderSelectedFoods();
   renderCategoryLimitsList();
   renderFoodLimitsList();
+  renderNutrientBufferList();
   renderLandingCatStrip();
   renderLandingStats();
   renderHeroCard();

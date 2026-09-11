@@ -175,6 +175,13 @@
       <input type="text" class="food-search" id="foodLimitSearch" placeholder="Search foods to override…" oninput="renderFoodLimitsList()">
       <div id="foodLimitsList"></div>
     </div>
+    <div class="panel">
+      <h3>Nutrient tolerance buffers <button class="btn btn-secondary btn-sm" onclick="resetNutrientBuffers()">Reset to defaults</button></h3>
+      <p class="field-hint" style="margin:-8px 0 16px;">
+        How far below (floor) or above (ceiling) each nutrient's daily target a combination is still allowed to land and count as "meeting" that nutrient. Defaults reflect published guidance, not a single flat rule — see each row's note. A nutrient with a real toxicological Upper Limit (UL) or the sodium CDRR always keeps that as its hard ceiling regardless of this setting.
+      </p>
+      <div id="nutrientBufferList"></div>
+    </div>
   </div>
 
   <div class="calc-tabpanel" id="calcTabResults">
@@ -313,6 +320,6 @@
 <div id="toastContainer" class="toast-container" aria-live="polite"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/javascript-lp-solver@0.4.24/prod/solver.js"></script>
-<script src="app.js?v=0de17e2"></script>
+<script src="app.js?v=99de142"></script>
 </body>
 </html>

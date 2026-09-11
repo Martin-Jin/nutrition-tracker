@@ -185,9 +185,10 @@
         "lactating_19_30": 71,
         "lactating_31_50": 71
       },
-      "floor_pct": 90,
-      "ceiling_pct": null,
-      "trackable": true
+      "floor_pct": 70,
+      "ceiling_pct": 150,
+      "trackable": true,
+      "comment": "Wider practical buffer than the default 90-110% -- protein has an AMDR (10-35% of energy, NASEM) reflecting a broad tolerance for total intake, unlike a micronutrient floor. Not a literal AMDR-to-gram conversion (the AMDR bounds % of total dietary calories, not this fixed RDA figure) -- just a deliberately looser band for a macro."
     },
     "carb_g": {
       "label": "Carbohydrate",
@@ -218,9 +219,10 @@
         "lactating_19_30": 210,
         "lactating_31_50": 210
       },
-      "floor_pct": 90,
-      "ceiling_pct": null,
-      "trackable": true
+      "floor_pct": 70,
+      "ceiling_pct": 150,
+      "trackable": true,
+      "comment": "Wider practical buffer than the default 90-110% -- carbohydrate has an AMDR (45-65% of energy, NASEM) reflecting a broad tolerance for total intake, unlike a micronutrient floor. Not a literal AMDR-to-gram conversion (the AMDR bounds % of total dietary calories, not this fixed RDA figure, which is the minimum to avoid ketosis) -- just a deliberately looser band for a macro."
     },
     "fiber_g": {
       "label": "Total Fiber",
@@ -284,10 +286,10 @@
         "lactating_19_30": null,
         "lactating_31_50": null
       },
-      "floor_pct": 90,
-      "ceiling_pct": 110,
+      "floor_pct": 70,
+      "ceiling_pct": 150,
       "trackable": true,
-      "comment": "NASEM sets Fat as an AMDR (% of energy: 20-35% adults, 25-35% children 4-18y, 30-40% children 1-3y), not a gram RDA/AI, except infants (AI in g/d: 31 g/d 0-6mo, 30 g/d 7-12mo). No gram value published for children/adults; null stored rather than estimating from a reference calorie level, per the never-guess rule."
+      "comment": "NASEM sets Fat as an AMDR (% of energy: 20-35% adults, 25-35% children 4-18y, 30-40% children 1-3y), not a gram RDA/AI, except infants (AI in g/d: 31 g/d 0-6mo, 30 g/d 7-12mo). No gram value published for children/adults; null stored rather than estimating from a reference calorie level, per the never-guess rule. floor_pct/ceiling_pct widened to 70-150% (from the default 90-110%) reflecting the AMDR's broad tolerance for total fat intake -- not a literal AMDR-to-gram conversion (the AMDR bounds % of total dietary calories, not this AI figure), just a deliberately looser band for a macro."
     },
     "calcium_mg": {
       "label": "Calcium",
@@ -550,7 +552,8 @@
         "lactating_19_30": 2300,
         "lactating_31_50": 2300
       },
-      "comment": "UL for sodium is the Chronic Disease Risk Reduction Intake (CDRR) from appJ_tab7, not a classic UL (ND for infants/1-8y in the elements UL table); used here as the practical ceiling."
+      "ul_type": "CDRR",
+      "comment": "UL for sodium is the Chronic Disease Risk Reduction Intake (CDRR) from appJ_tab7, not a classic UL (ND for infants/1-8y in the elements UL table); used here as the practical ceiling. NASEM's 2019 DRI report for Sodium and Potassium found insufficient evidence for a toxicological UL and introduced the CDRR instead, based on cardiovascular/blood-pressure outcome evidence rather than acute toxicity -- a different kind of ceiling than iron/vitamin A's UL, which are grounded in acute toxicity risk."
     },
     "iron_mg": {
       "label": "Iron",
