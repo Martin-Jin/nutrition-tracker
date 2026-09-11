@@ -453,9 +453,20 @@ function renderFoodPicker(){
   const renderItem = (f) => {
     const checked = state.selectedFoods[f.name] ? 'checked' : '';
     const sel = state.selectedFoods[f.name] ? 'selected' : '';
+    // A <label> wrapping a checkbox natively forwards any click on the label
+    // (including on the "span" text) into a synthetic click on its checkbox
+    // -- that forwarding fires *after* our own onmousedown handler already
+    // toggled state.selectedFoods via applyDragSelect, so it immediately
+    // toggles the checkbox right back and re-fires onchange with the
+    // opposite value, undoing what the drag/click just did (visible as
+    // "clicking a row to unselect it doesn't work"). Blocking the label's
+    // own click event stops that native forwarding; it does not stop clicks
+    // that land directly on the checkbox, which keep working via their own
+    // native toggle + onchange.
     return `<label class="food-item ${sel}" data-name="${escAttr(f.name)}"
         onmousedown="foodPickerMouseDown('${escName(f.name)}', event)"
-        onmouseenter="foodPickerMouseEnter('${escName(f.name)}')">
+        onmouseenter="foodPickerMouseEnter('${escName(f.name)}')"
+        onclick="if(event.target.tagName !== 'INPUT') event.preventDefault()">
       <input type="checkbox" ${checked} onchange="toggleFood('${escName(f.name)}', this.checked)">
       <span>${f.name}</span>
     </label>`;
@@ -641,6 +652,11 @@ function buildLPModel(selectedNames, targets, uls, objectiveType, calorieTarget)
       const perGram = (food[key] || 0) / 100;
       varDef[`min_${key}`] = perGram;
       varDef[`max_${key}`] = perGram;
+      // Same per-gram contribution, reused by bestEffortUsage's "maximize
+      // coverage toward each floor" objective -- kept separate from
+      // min_/max_ so deleting the min_ constraints there doesn't also
+      // remove the coefficients the coverage objective needs.
+      varDef[`cov_${key}`] = perGram;
     });
     varDef.kcal_obj = (food.kcal || 0) / 100;
     if(calorieTarget){
@@ -940,14 +956,53 @@ function hideComboPie(cardEl){
 // simultaneously, not that the user doesn't have enough of something.
 function bestEffortUsage(names, targets, uls, calorieTarget){
   const model = buildLPModel(names, targets, uls, 'grams', calorieTarget);
-  // Relax every min_/max_ constraint so the LP always has a feasible point,
-  // then re-solve minimizing total grams -- this yields *a* point, not
-  // necessarily the closest one, but with the floors still present as soft
-  // targets (via the original constraints made non-binding) it stays close
-  // in practice for the "still short on X" reporting this feeds.
+  // The floor (min_) constraints are exactly what made the original solve
+  // infeasible, so they're dropped here -- but simply dropping them and
+  // minimizing total grams (the model's normal objective) has a trivial
+  // optimum of zero grams of everything, which is why this used to report a
+  // flat 0% on every nutrient regardless of what was actually achievable:
+  // there was nothing left in the model telling the solver to use any food
+  // at all once the floors were gone.
+  //
+  // Fix: maximize the summed coverage fraction (amount achieved / floor)
+  // across every nutrient, each fraction capped at 1.0 via its own auxiliary
+  // variable (cov_<key>, bounded [0,1]) tied to the real nutrient total by an
+  // equality-style constraint. The cap keeps a food that blows way past one
+  // nutrient's floor from "banking" that surplus to inflate the objective
+  // while other nutrients stay at zero -- each nutrient can contribute at
+  // most 1 to the sum, so the solver is pushed toward covering all of them,
+  // not just the cheapest one. Ceiling (max_) constraints stay in place.
   Object.keys(model.constraints).forEach(cKey => {
     if(cKey.startsWith('min_')) delete model.constraints[cKey].min;
   });
+
+  TRACKABLE_KEYS.forEach(key => {
+    const target = targets[key];
+    if(target === null || target === undefined) return;
+    const nd = DRI.nutrients[key];
+    const floor = target * ((nd.floor_pct ?? 90) / 100);
+    if(!floor) return;
+    // link_<key>: (per-gram contribution summed over foods) - floor*cov_<key> = 0,
+    // i.e. cov_<key> = actual/floor once solved -- expressed as an equality
+    // constraint so the solver can freely trade grams against the bounded
+    // cov_<key> variable instead of cov_<key> being computed after the fact.
+    model.constraints[`link_${key}`] = { equal: 0 };
+    names.forEach(name => {
+      const food = FOODS.find(f => f.name === name);
+      const perGram = (food[key] || 0) / 100;
+      model.variables[name][`link_${key}`] = perGram;
+    });
+    model.constraints[`cov_ub_${key}`] = { max: 1 };
+    model.variables[`cov_${key}`] = {
+      [`link_${key}`]: -floor,
+      [`cov_ub_${key}`]: 1,
+      coverage_obj: 1,
+    };
+  });
+
+  model.optimize = 'coverage_obj';
+  model.opType = 'max';
+
   let result;
   try{ result = window.solver.Solve(model); }catch(e){ result = null; }
   const usage = {};
