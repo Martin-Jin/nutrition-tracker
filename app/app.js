@@ -911,10 +911,11 @@ function renderSuccessResults(solutions, targets, uls, calorieTarget){
 // are still comparable slices of "how much of today's need this combo
 // covers." Built lazily on hover rather than for every card up front --
 // there can be several combinations, and most are never hovered.
-function showComboPie(cardEl, idx){
-  const sol = window.__lastSolutions && window.__lastSolutions[idx];
+function showComboPie(cardEl, idx, isBestEffort){
+  const source = isBestEffort ? window.__lastBestEffortCombos : window.__lastSolutions;
+  const sol = source && source[idx];
   if(!sol) return;
-  const { targets } = getTargets();
+  const targets = isBestEffort ? window.__lastBestEffortTargets : getTargets().targets;
   const slices = [];
   const palette = ['#1F3A2E','#A8462F','#C89B3C','#5B4E9E','#2E7D4F','#B4772A','#5B5748','#2E5442','#C25A3F','#8C7A3C'];
   let colorIdx = 0;
@@ -947,14 +948,14 @@ function hideComboPie(cardEl){
   if(popover) popover.classList.remove('show');
 }
 
-// Best-effort relaxation when no feasible combination exists: minimize total
-// grams while allowing each nutrient constraint to be violated, weighted so
-// the solver still prefers getting as close to every floor as it can. Used
-// only to report "how close can we get" -- there's no "amount on hand" to
-// fall back to now that foods are unbounded, so an infeasible result here
-// means the selected foods' nutrient ratios can never satisfy every target
-// simultaneously, not that the user doesn't have enough of something.
-function bestEffortUsage(names, targets, uls, calorieTarget){
+// Best-effort relaxation when no feasible combination exists: maximize
+// coverage toward each nutrient's floor rather than requiring all of them at
+// once. Used only to report "how close can we get" -- there's no "amount on
+// hand" to fall back to now that foods are unbounded, so an infeasible
+// result here means the selected foods' nutrient ratios can never satisfy
+// every target simultaneously, not that the user doesn't have enough of
+// something.
+function buildCoverageModel(names, targets, uls, calorieTarget){
   const model = buildLPModel(names, targets, uls, 'grams', calorieTarget);
   // The floor (min_) constraints are exactly what made the original solve
   // infeasible, so they're dropped here -- but simply dropping them and
@@ -1002,7 +1003,11 @@ function bestEffortUsage(names, targets, uls, calorieTarget){
 
   model.optimize = 'coverage_obj';
   model.opType = 'max';
+  return model;
+}
 
+function solveCoverageUsage(names, targets, uls, calorieTarget){
+  const model = buildCoverageModel(names, targets, uls, calorieTarget);
   let result;
   try{ result = window.solver.Solve(model); }catch(e){ result = null; }
   const usage = {};
@@ -1010,13 +1015,68 @@ function bestEffortUsage(names, targets, uls, calorieTarget){
   return usage;
 }
 
-function renderInfeasibleResults(names, targets, uls, calorieTarget){
-  const panel = document.getElementById('resultsPanel');
-  const usage = bestEffortUsage(names, targets, uls, calorieTarget);
-  const totals = computeTotalsFromUsage(usage);
+// Average nutrient coverage (0..1, each nutrient capped at 1.0 -- an
+// overshoot on one nutrient shouldn't inflate the average past what a
+// balanced combination would score) -- used to rank best-effort combinations
+// against each other the same way "meets all targets" isn't a single
+// yes/no for the feasible case either.
+function averageCoverage(totals, targets){
+  let sum = 0, count = 0;
+  TRACKABLE_KEYS.forEach(key => {
+    const target = targets[key];
+    if(target === null || target === undefined) return;
+    const nd = DRI.nutrients[key];
+    const floor = target * ((nd.floor_pct ?? 90) / 100);
+    if(!floor) return;
+    count++;
+    sum += Math.min((totals[key] || 0) / floor, 1);
+  });
+  return count > 0 ? sum / count : 0;
+}
 
+// Surfaces several distinct best-effort combinations, not just one, so the
+// user can compare closest-coverage options the same way the feasible path
+// already lists multiple combinations. Reuses the feasible path's approach:
+// solve with the full selection, then with each single food dropped, to
+// surface genuinely different combinations rather than the same subset
+// twice; collapse near-duplicates and rank the rest by average coverage.
+function bestEffortUsages(names, targets, uls, calorieTarget, maxResults = 5){
+  const candidates = [];
+  const seen = new Set();
+
+  const tryUsage = (subset) => {
+    if(subset.length === 0) return;
+    const usage = solveCoverageUsage(subset, targets, uls, calorieTarget);
+    const sig = solutionSignature(usage);
+    if(!sig || seen.has(sig)) return;
+    seen.add(sig);
+    const totals = computeTotalsFromUsage(usage);
+    candidates.push({ usage, totals, coverage: averageCoverage(totals, targets) });
+  };
+
+  tryUsage(names);
+  if(names.length > 1){
+    for(let i = 0; i < names.length; i++){
+      tryUsage(names.filter((_, idx) => idx !== i));
+    }
+  }
+
+  const distinct = [];
+  candidates
+    .sort((a, b) => b.coverage - a.coverage)
+    .forEach(cand => {
+      const dupe = distinct.some(kept => solutionsAreSimilar(kept.usage, cand.usage));
+      if(!dupe) distinct.push(cand);
+    });
+
+  return distinct.slice(0, maxResults);
+}
+
+// Computes each nutrient's gap against its floor/ceiling for one combo's
+// totals -- shared by the ranked list (each card shows its own bars) and by
+// the gap-filling section below (based on the single closest combo).
+function computeGaps(totals, targets, uls){
   const gaps = {};
-  let infeasibleReason = null;
   TRACKABLE_KEYS.forEach(k => {
     const target = targets[k];
     if(target === null || target === undefined) return;
@@ -1030,40 +1090,91 @@ function renderInfeasibleResults(names, targets, uls, calorieTarget){
       gaps[k] = -(have - ceil); // negative = overshoot past ceiling
     }
   });
+  return gaps;
+}
 
-  let html = `<div class="combo-card status-partial">
-    <div class="combo-title"><span>No combination of your selected foods meets all daily targets</span>
-    <span class="combo-badge badge-partial">partial coverage</span></div>
-    <div style="font-size:13px; color:var(--ink-soft); margin-bottom:14px;">
-      No amount of your selected foods can hit every target at once — here's the closest achievable coverage (target band: 90%–110%, or the published upper limit where one exists), plus what's still missing.
-    </div>`;
+function renderInfeasibleResults(names, targets, uls, calorieTarget){
+  const panel = document.getElementById('resultsPanel');
+  const combos = bestEffortUsages(names, targets, uls, calorieTarget);
 
-  html += `<div style="margin-top:10px;">`;
-  if(calorieTarget){
-    const havekcal = totals.kcal || 0;
-    const pctKcal = Math.min(999, Math.round((havekcal/calorieTarget)*100));
-    const barClassKcal = pctKcal > 110 ? 'over' : (pctKcal >= 90 ? '' : 'under');
-    html += `<div class="nutrient-bar-row">
-      <div class="nutrient-bar-label">Calories</div>
-      <div class="nutrient-bar-track"><div class="nutrient-bar-fill ${barClassKcal}" style="width:${Math.min(100,pctKcal)}%"></div></div>
-      <div class="nutrient-bar-pct">${pctKcal}%</div>
+  if(combos.length === 0){
+    panel.innerHTML = `<div class="combo-card status-partial">
+      <div class="combo-title"><span>No combination of your selected foods meets all daily targets</span>
+      <span class="combo-badge badge-partial">partial coverage</span></div>
+      <div style="font-size:13px; color:var(--ink-soft);">The solver couldn't find any usable combination — try selecting different foods.</div>
     </div>`;
+    return;
   }
-  TRACKABLE_KEYS.forEach(k => {
-    const target = targets[k];
-    if(target === null || target === undefined) return;
-    const have = totals[k] || 0;
-    const pct = Math.min(999, Math.round((have/target)*100));
-    const over = gaps[k] !== undefined && gaps[k] < 0;
-    const barClass = over ? 'over' : (pct >= 90 ? '' : 'under');
-    html += `<div class="nutrient-bar-row">
-      <div class="nutrient-bar-label">${DRI.nutrients[k].label}</div>
-      <div class="nutrient-bar-track"><div class="nutrient-bar-fill ${barClass}" style="width:${Math.min(100,pct)}%"></div></div>
-      <div class="nutrient-bar-pct">${pct}%</div>
+
+  let html = `<h3 style="margin-bottom:6px;">No combination meets all your daily targets — closest ${combos.length > 1 ? `${combos.length} combinations` : 'combination'} by coverage</h3>
+    <div style="font-size:13px; color:var(--ink-soft); margin-bottom:14px;">
+      Ranked by average coverage across all tracked nutrients (target band: 90%–110%, or the published upper limit where one exists). Hover a combination to see its own nutrient breakdown.
+    </div>`;
+
+  combos.forEach((combo, idx) => {
+    const { usage, totals } = combo;
+    const gaps = computeGaps(totals, targets, uls);
+    const items = Object.entries(usage).filter(([,g]) => g > 0.5);
+    const maxGrams = Math.max(...items.map(([,g]) => g), 1);
+    const pctLabel = `${Math.round(combo.coverage * 100)}% average coverage`;
+
+    html += `<div class="combo-card status-partial" onmouseenter="showComboPie(this, ${idx}, true)" onmouseleave="hideComboPie(this)">
+      <div class="combo-title">
+        <span>Combination ${idx+1}</span>
+        <span class="combo-badge badge-partial">${pctLabel}</span>
+      </div>`;
+
+    if(items.length > 0){
+      html += `<div class="combo-items">
+        ${items.map(([name, g]) => {
+          const pct = Math.max((g / maxGrams) * 100, 2);
+          return `<div class="combo-item-row">
+            <span class="combo-item-name">${name}</span>
+            <span class="combo-item-track"><span class="combo-item-fill" style="width:${pct}%"></span></span>
+            <span class="combo-item-qty">${Math.round(g)} g</span>
+          </div>`;
+        }).join('')}
+      </div>`;
+    }
+
+    html += `<div style="margin-top:12px;">`;
+    if(calorieTarget){
+      const havekcal = totals.kcal || 0;
+      const pctKcal = Math.min(999, Math.round((havekcal/calorieTarget)*100));
+      const barClassKcal = pctKcal > 110 ? 'over' : (pctKcal >= 90 ? '' : 'under');
+      html += `<div class="nutrient-bar-row">
+        <div class="nutrient-bar-label">Calories</div>
+        <div class="nutrient-bar-track"><div class="nutrient-bar-fill ${barClassKcal}" style="width:${Math.min(100,pctKcal)}%"></div></div>
+        <div class="nutrient-bar-pct">${pctKcal}%</div>
+      </div>`;
+    }
+    TRACKABLE_KEYS.forEach(k => {
+      const target = targets[k];
+      if(target === null || target === undefined) return;
+      const have = totals[k] || 0;
+      const pct = Math.min(999, Math.round((have/target)*100));
+      const over = gaps[k] !== undefined && gaps[k] < 0;
+      const barClass = over ? 'over' : (pct >= 90 ? '' : 'under');
+      html += `<div class="nutrient-bar-row">
+        <div class="nutrient-bar-label">${DRI.nutrients[k].label}</div>
+        <div class="nutrient-bar-track"><div class="nutrient-bar-fill ${barClass}" style="width:${Math.min(100,pct)}%"></div></div>
+        <div class="nutrient-bar-pct">${pct}%</div>
+      </div>`;
+    });
+    html += `</div>
+      <div class="combo-pie-popover"></div>
     </div>`;
   });
-  html += `</div></div>`;
 
+  window.__lastBestEffortCombos = combos;
+  window.__lastBestEffortTargets = targets;
+
+  // Gap-filling suggestions below are based on the single closest (top-
+  // ranked) combination -- showing "foods ranked by missing nutrient" for
+  // every listed combination separately would be redundant noise, and the
+  // top-ranked one is the most actionable starting point regardless.
+  const bestCombo = combos[0];
+  const gaps = computeGaps(bestCombo.totals, targets, uls);
   const shortfalls = Object.entries(gaps).filter(([,v]) => v > 0);
   const overshoots = Object.entries(gaps).filter(([,v]) => v < 0);
 
