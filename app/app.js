@@ -36,8 +36,48 @@ let state = {
   disabledFoods: {},  // name -> true (excluded from solver AND hidden from the calculator's food picker)
   customFoods: [],    // user-added foods, same shape as FOODS entries
   editedFoods: {},    // name -> partial food object overriding fetched values
-  simplifyCategories: false, // when true, catalogue + calculator show one flat list instead of grouping by Meats/Vegetables/Fruits/Nuts
+  simplifyVariants: false, // when true, only one representative per SIMPLIFY_GROUPS entry is usable; other variants in the group are hidden from the calculator
+  categoryGramLimits: {}, // category name -> max grams per food in that category (solver upper bound); undefined = unbounded
+  foodGramLimits: {},     // food name -> max grams, overrides the category default for that one food
 };
+
+// Curated groups of foods that are really the same product at different cuts/
+// preparations (e.g. chicken breast vs thigh) -- NOT foods that merely share a
+// first word but are nutritionally distinct products (almonds vs walnuts,
+// salmon vs cod, cheddar vs cottage cheese stay separate). Simplify collapses
+// each group down to its `rep` (most common/generic variant) for calculator
+// and solver purposes; the other names in the group are excluded from
+// selection while simplifyVariants is on, but remain untouched in the raw
+// catalogue/JSON.
+const SIMPLIFY_GROUPS = [
+  { rep: 'Chicken, broilers or fryers, breast, meat only, cooked, roasted',
+    members: ['Chicken, broilers or fryers, breast, meat only, cooked, roasted', 'Chicken, broilers or fryers, thigh, meat only, cooked, roasted'] },
+  { rep: 'Beef, ground, 85% lean meat / 15% fat, patty, cooked, broiled',
+    members: ['Beef, ground, 85% lean meat / 15% fat, patty, cooked, broiled', 'Beef, ground, 93% lean meat / 7% fat, patty, cooked, broiled'] },
+  { rep: 'Cabbage, raw',
+    members: ['Cabbage, raw', 'Cabbage, chinese (pak-choi), raw', 'Cabbage, chinese (pe-tsai), raw'] },
+  { rep: 'Rice, white, long-grain, regular, cooked, enriched, with salt',
+    members: ['Rice, white, long-grain, regular, cooked, enriched, with salt', "Rice, brown, long-grain, cooked (Includes foods for USDA's Food Distribution Program)"] },
+  { rep: 'Bread, whole-wheat, commercially prepared',
+    members: ['Bread, white, commercially prepared (includes soft bread crumbs)', 'Bread, whole-wheat, commercially prepared'] },
+  { rep: 'Pasta, cooked, enriched, without added salt',
+    members: ['Pasta, cooked, enriched, without added salt', "Pasta, whole-wheat, cooked (Includes foods for USDA's Food Distribution Program)"] },
+  { rep: 'Milk, whole, 3.25% milkfat, with added vitamin D',
+    members: ['Milk, whole, 3.25% milkfat, with added vitamin D', 'Milk, nonfat, fluid, with added vitamin A and vitamin D (fat free or skim)'] },
+  { rep: "Yogurt, Greek, plain, nonfat (Includes foods for USDA's Food Distribution Program)",
+    members: ["Yogurt, Greek, plain, nonfat (Includes foods for USDA's Food Distribution Program)", 'Yogurt, plain, whole milk'] },
+];
+
+// name -> true for every non-representative member of a simplify group.
+const SIMPLIFY_HIDDEN_NAMES = new Set(
+  SIMPLIFY_GROUPS.flatMap(g => g.members.filter(m => m !== g.rep))
+);
+
+// Standard grocery-aisle grouping used for gram-limit defaults. Foods keep
+// their existing `category` field (Meats/Vegetables/Fruits/Nuts/Grains/Dairy)
+// for the catalogue/picker grouping -- this is the same field, reused here so
+// one limit input per category applies to everything already grouped there.
+const GRAM_LIMIT_CATEGORIES = ['Meats', 'Vegetables', 'Fruits', 'Nuts', 'Grains', 'Dairy'];
 
 // ============================================================================
 // PERSISTENCE (localStorage) -- profile, overrides, disabled/custom/edited foods
@@ -48,11 +88,14 @@ function saveState(){
   try{
     const toSave = {
       profile: state.profile,
+      selectedFoods: state.selectedFoods,
       overrides: state.overrides,
       disabledFoods: state.disabledFoods,
       customFoods: state.customFoods,
       editedFoods: state.editedFoods,
-      simplifyCategories: state.simplifyCategories,
+      simplifyVariants: state.simplifyVariants,
+      categoryGramLimits: state.categoryGramLimits,
+      foodGramLimits: state.foodGramLimits,
     };
     localStorage.setItem(LS_KEY, JSON.stringify(toSave));
   }catch(e){
@@ -66,11 +109,14 @@ function loadState(){
     if(!raw) return;
     const parsed = JSON.parse(raw);
     if(parsed.profile) state.profile = Object.assign(state.profile, parsed.profile);
+    if(parsed.selectedFoods) state.selectedFoods = parsed.selectedFoods;
     if(parsed.overrides) state.overrides = parsed.overrides;
     if(parsed.disabledFoods) state.disabledFoods = parsed.disabledFoods;
     if(parsed.customFoods) state.customFoods = parsed.customFoods;
     if(parsed.editedFoods) state.editedFoods = parsed.editedFoods;
-    if(typeof parsed.simplifyCategories === 'boolean') state.simplifyCategories = parsed.simplifyCategories;
+    if(typeof parsed.simplifyVariants === 'boolean') state.simplifyVariants = parsed.simplifyVariants;
+    if(parsed.categoryGramLimits) state.categoryGramLimits = parsed.categoryGramLimits;
+    if(parsed.foodGramLimits) state.foodGramLimits = parsed.foodGramLimits;
   }catch(e){
     console.warn('localStorage load failed', e);
   }
@@ -85,9 +131,33 @@ function applyFoodOverrides(){
     const edited = state.editedFoods[f.name];
     const food = edited ? Object.assign({}, f, edited) : Object.assign({}, f);
     food.enabled = !state.disabledFoods[f.name];
+    // hiddenByVariant: true for non-representative members of a SIMPLIFY_GROUPS
+    // entry while simplifyVariants is on -- kept in FOODS (catalogue still
+    // shows every USDA entry) but excluded from the calculator's food picker
+    // and solver, same treatment as a disabled food gets there.
+    food.hiddenByVariant = state.simplifyVariants && SIMPLIFY_HIDDEN_NAMES.has(f.name);
     return food;
   });
   FOODS = merged;
+}
+
+// Resolves the gram cap the solver should enforce for one food: a manual
+// per-food override always wins; otherwise the food's category default;
+// otherwise unbounded (null). Both override and default are just a number on
+// the same "max grams for this food" concept -- there's no separate
+// mechanism, the override simply takes precedence when set.
+function resolveGramLimit(food){
+  const override = state.foodGramLimits[food.name];
+  if(override !== undefined && override !== null && override !== ''){
+    const n = parseFloat(override);
+    return isNaN(n) ? null : n;
+  }
+  const catDefault = state.categoryGramLimits[food.category];
+  if(catDefault !== undefined && catDefault !== null && catDefault !== ''){
+    const n = parseFloat(catDefault);
+    return isNaN(n) ? null : n;
+  }
+  return null;
 }
 
 async function loadData(){
@@ -378,57 +448,63 @@ function renderFoodPicker(){
   // Foods disabled in the catalogue are not just unselectable here, they're
   // not shown at all -- what's enabled in the catalogue is exactly what's
   // available in the calculator, with nothing left to "re-enable" per view.
-  const available = FOODS.filter(f => f.enabled && (!q || foodMatchesQuery(f, q)));
+  const available = FOODS.filter(f => f.enabled && !f.hiddenByVariant && (!q || foodMatchesQuery(f, q)));
 
   const renderItem = (f) => {
     const checked = state.selectedFoods[f.name] ? 'checked' : '';
     const sel = state.selectedFoods[f.name] ? 'selected' : '';
-    return `<label class="food-item ${sel}">
+    return `<label class="food-item ${sel}" data-name="${escAttr(f.name)}"
+        onmousedown="foodPickerMouseDown('${escName(f.name)}', event)"
+        onmouseenter="foodPickerMouseEnter('${escName(f.name)}')">
       <input type="checkbox" ${checked} onchange="toggleFood('${escName(f.name)}', this.checked)">
       <span>${f.name}</span>
     </label>`;
   };
 
   let html = '';
-  if(state.simplifyCategories){
-    html = available.map(renderItem).join('');
-  } else {
-    const byCat = {};
-    available.forEach(f => (byCat[f.category] = byCat[f.category] || []).push(f));
-    Object.keys(byCat).forEach(cat => {
-      const allSelected = byCat[cat].every(f => state.selectedFoods[f.name]);
-      html += `<div class="food-cat-label">
-        <label class="cat-select-toggle" title="${allSelected ? 'Unselect' : 'Select'} all ${cat}">
-          <input type="checkbox" ${allSelected ? 'checked' : ''} onchange="toggleCategorySelection('${escName(cat)}', this.checked)">
-        </label>
-        <span>${cat}</span>
-      </div>`;
-      html += byCat[cat].map(renderItem).join('');
-    });
-  }
+  const byCat = {};
+  available.forEach(f => (byCat[f.category] = byCat[f.category] || []).push(f));
+  Object.keys(byCat).forEach(cat => {
+    const allSelected = byCat[cat].every(f => state.selectedFoods[f.name]);
+    html += `<div class="food-cat-label">
+      <label class="cat-select-toggle" title="${allSelected ? 'Unselect' : 'Select'} all ${cat}">
+        <input type="checkbox" ${allSelected ? 'checked' : ''} onchange="toggleCategorySelection('${escName(cat)}', this.checked)">
+      </label>
+      <span>${cat}</span>
+    </div>`;
+    html += byCat[cat].map(renderItem).join('');
+  });
   list.innerHTML = html || '<div class="field-hint">No foods match your search.</div>';
 }
 
-function escName(name){ return name.replace(/'/g, "\\'"); }
+// Used inside a JS string literal that itself sits inside a double-quoted
+// HTML attribute (onclick="fn('...')") -- must escape both the JS quote (')
+// and the HTML attribute quote ("), since a food name can contain either
+// (e.g. the Lamb entry's literal 1/4" fat cut). Escaping only one of the two
+// leaves the other free to break out of its respective quoting.
+function escName(name){ return name.replace(/'/g, "\\'").replace(/"/g, '&quot;'); }
+function escAttr(name){ return name.replace(/&/g,'&amp;').replace(/"/g,'&quot;'); }
 
 function selectAllFoods(){
   const q = (document.getElementById('calcFoodSearch').value || '').toLowerCase();
-  FOODS.filter(f => f.enabled && (!q || foodMatchesQuery(f, q))).forEach(f => {
+  FOODS.filter(f => f.enabled && !f.hiddenByVariant && (!q || foodMatchesQuery(f, q))).forEach(f => {
     state.selectedFoods[f.name] = state.selectedFoods[f.name] || {};
   });
+  saveState();
   renderFoodPicker();
   renderSelectedFoods();
 }
 
 function toggleCategorySelection(category, checked){
   const q = (document.getElementById('calcFoodSearch').value || '').toLowerCase();
-  FOODS.filter(f => f.enabled && f.category === category && (!q || foodMatchesQuery(f, q))).forEach(f => {
+  FOODS.filter(f => f.enabled && !f.hiddenByVariant && f.category === category && (!q || foodMatchesQuery(f, q))).forEach(f => {
     if(checked){
       state.selectedFoods[f.name] = state.selectedFoods[f.name] || {};
     } else {
       delete state.selectedFoods[f.name];
     }
   });
+  saveState();
   renderFoodPicker();
   renderSelectedFoods();
 }
@@ -439,9 +515,63 @@ function toggleFood(name, checked){
   } else {
     delete state.selectedFoods[name];
   }
+  saveState();
   renderFoodPicker();
   renderSelectedFoods();
 }
+
+// ---- drag-to-select in the food picker ----
+// Mousedown on a food row starts a drag; the *first* row touched decides the
+// target state (select if it was unselected, unselect if it was selected),
+// and every row the pointer passes over while the button is held gets set to
+// that same state. A plain click (no movement) still works via the row's own
+// onchange handler -- drag tracking here does not preventDefault on mousedown,
+// it only listens for mouseenter while dragging.
+let dragSelectActive = false;
+let dragSelectTargetState = true;
+
+function foodPickerMouseDown(name, e){
+  if(e.button !== 0) return; // left button only
+  // A mousedown that started directly on the checkbox is a plain click --
+  // let the checkbox's own native toggle + onchange handle it (fighting that
+  // with a manual state write here causes the checked state to flip back on
+  // the following click event). Drag-select only takes over when the press
+  // starts on the label/row itself.
+  if(e.target.tagName === 'INPUT') return;
+  dragSelectActive = true;
+  dragSelectTargetState = !state.selectedFoods[name];
+  applyDragSelect(name);
+  e.preventDefault(); // avoid text selection while dragging across labels
+}
+
+function foodPickerMouseEnter(name){
+  if(!dragSelectActive) return;
+  applyDragSelect(name);
+}
+
+function applyDragSelect(name){
+  if(dragSelectTargetState){
+    state.selectedFoods[name] = state.selectedFoods[name] || {};
+  } else {
+    delete state.selectedFoods[name];
+  }
+  const row = document.querySelector(`.food-item[data-name="${cssEscape(name)}"]`);
+  if(row){
+    row.classList.toggle('selected', dragSelectTargetState);
+    const cb = row.querySelector('input[type=checkbox]');
+    if(cb) cb.checked = dragSelectTargetState;
+  }
+  renderSelectedFoods();
+}
+
+document.addEventListener('mouseup', () => {
+  if(dragSelectActive){
+    dragSelectActive = false;
+    saveState();
+  }
+});
+
+function cssEscape(s){ return (window.CSS && CSS.escape) ? CSS.escape(s) : s.replace(/["\\]/g, '\\$&'); }
 
 function renderSelectedFoods(){
   const container = document.getElementById('selectedFoodsList');
@@ -460,6 +590,7 @@ function renderSelectedFoods(){
 
 function clearSelection(){
   state.selectedFoods = {};
+  saveState();
   renderFoodPicker();
   renderSelectedFoods();
   document.getElementById('resultsPanel').innerHTML = '';
@@ -517,6 +648,16 @@ function buildLPModel(selectedNames, targets, uls, objectiveType, calorieTarget)
       varDef.min_kcal = kcalPerGram;
       varDef.max_kcal = kcalPerGram;
     }
+    // Per-food gram cap (manual override, else its category default, else
+    // unbounded) -- modeled as its own single-variable constraint rather than
+    // a shared one, since each food's cap is independent of every other
+    // food's.
+    const gramLimit = resolveGramLimit(food);
+    if(gramLimit !== null && gramLimit > 0){
+      const capKey = `cap_${name}`;
+      varDef[capKey] = 1;
+      constraints[capKey] = { max: gramLimit };
+    }
     variables[name] = varDef;
   });
 
@@ -566,13 +707,70 @@ function solutionsAreSimilar(usageA, usageB, threshold = 0.2){
 function setCalcTab(tab){
   document.querySelectorAll('.calc-tab').forEach(b => b.classList.toggle('active', b.dataset.calctab === tab));
   document.getElementById('calcTabSelect').classList.toggle('active', tab === 'select');
+  document.getElementById('calcTabSettings').classList.toggle('active', tab === 'settings');
   document.getElementById('calcTabResults').classList.toggle('active', tab === 'results');
+  if(tab === 'settings'){ renderCategoryLimitsList(); renderFoodLimitsList(); }
+}
+
+// ============================================================================
+// CALCULATOR: serving-limit settings (category defaults + per-food overrides)
+// ============================================================================
+function renderCategoryLimitsList(){
+  const container = document.getElementById('categoryLimitsList');
+  if(!container) return;
+  const catsPresent = GRAM_LIMIT_CATEGORIES.filter(cat => FOODS.some(f => f.category === cat));
+  container.innerHTML = catsPresent.map(cat => {
+    const val = state.categoryGramLimits[cat];
+    return `<div class="field-row">
+      <label>${cat}</label>
+      <div>
+        <input type="number" min="0" step="any" placeholder="no limit" value="${val ?? ''}"
+          onchange="onCategoryLimitChange('${escName(cat)}', this.value)">
+        <div class="field-hint">grams per food, per day</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function onCategoryLimitChange(category, value){
+  if(value === ''){ delete state.categoryGramLimits[category]; }
+  else { state.categoryGramLimits[category] = value; }
+  saveState();
+}
+
+function renderFoodLimitsList(){
+  const container = document.getElementById('foodLimitsList');
+  if(!container) return;
+  const q = (document.getElementById('foodLimitSearch').value || '').toLowerCase();
+  const list = FOODS.filter(f => f.enabled && !f.hiddenByVariant && (!q || foodMatchesQuery(f, q)));
+  if(list.length === 0){
+    container.innerHTML = '<div class="field-hint">No foods match your search.</div>';
+    return;
+  }
+  container.innerHTML = list.map(f => {
+    const override = state.foodGramLimits[f.name];
+    const catDefault = state.categoryGramLimits[f.category];
+    const placeholder = (catDefault !== undefined && catDefault !== null && catDefault !== '') ? `category: ${catDefault}g` : 'no limit';
+    return `<div class="field-row">
+      <label>${f.name} <span class="field-hint" style="display:block;">${f.category}</span></label>
+      <div>
+        <input type="number" min="0" step="any" placeholder="${placeholder}" value="${override ?? ''}"
+          onchange="onFoodLimitChange('${escName(f.name)}', this.value)">
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function onFoodLimitChange(name, value){
+  if(value === ''){ delete state.foodGramLimits[name]; }
+  else { state.foodGramLimits[name] = value; }
+  saveState();
 }
 
 function runCalculation(){
   const names = Object.keys(state.selectedFoods).filter(name => {
     const food = FOODS.find(f => f.name === name);
-    return food && food.enabled;
+    return food && food.enabled && !food.hiddenByVariant;
   });
   const resultsPanel = document.getElementById('resultsPanel');
   setCalcTab('results');
@@ -668,7 +866,7 @@ function renderSuccessResults(solutions, targets, uls, calorieTarget){
     const items = Object.entries(sol.usage).filter(([,g]) => g > 0.5);
     const maxGrams = Math.max(...items.map(([,g]) => g), 1);
     const badgeLabel = calorieTarget ? 'meets all targets, incl. calories (90%–110% band)' : 'meets all targets (90%–110% band)';
-    html += `<div class="combo-card status-full">
+    html += `<div class="combo-card status-full" onmouseenter="showComboPie(this, ${idx})" onmouseleave="hideComboPie(this)">
       <div class="combo-title">
         <span>Combination ${idx+1}</span>
         <span class="combo-badge badge-full">${badgeLabel}</span>
@@ -684,9 +882,53 @@ function renderSuccessResults(solutions, targets, uls, calorieTarget){
         }).join('')}
       </div>
       <div style="margin-top:12px; font-size:12px; color:var(--ink-soft);">Total: ${Math.round(sol.totals.kcal)} kcal${calorieTarget ? ` (target ${Math.round(calorieTarget)} kcal)` : ''}</div>
+      <div class="combo-pie-popover"></div>
     </div>`;
   });
   panel.innerHTML = html;
+  window.__lastSolutions = solutions;
+}
+
+// Nutrient-composition pie shown on hover over a combination card: each
+// TRACKABLE_KEYS nutrient's share of that combination's total, normalized to
+// the DRI daily target so nutrients of very different units (mg vs µg vs g)
+// are still comparable slices of "how much of today's need this combo
+// covers." Built lazily on hover rather than for every card up front --
+// there can be several combinations, and most are never hovered.
+function showComboPie(cardEl, idx){
+  const sol = window.__lastSolutions && window.__lastSolutions[idx];
+  if(!sol) return;
+  const { targets } = getTargets();
+  const slices = [];
+  const palette = ['#1F3A2E','#A8462F','#C89B3C','#5B4E9E','#2E7D4F','#B4772A','#5B5748','#2E5442','#C25A3F','#8C7A3C'];
+  let colorIdx = 0;
+  TRACKABLE_KEYS.forEach(key => {
+    const target = targets[key];
+    const have = sol.totals[key] || 0;
+    if(!target || have <= 0) return;
+    slices.push({ label: DRI.nutrients[key].label, value: have / target, color: palette[colorIdx++ % palette.length] });
+  });
+  const popover = cardEl.querySelector('.combo-pie-popover');
+  if(!popover) return;
+  if(slices.length === 0){
+    popover.innerHTML = '<div class="field-hint">No nutrient data to chart.</div>';
+  } else {
+    popover.innerHTML = `
+      <div class="pie-chart-row">
+        ${svgPieChart(slices, { size: 150 })}
+        <div class="pie-legend">
+          ${slices.map(s => `<div class="pie-legend-row"><span class="pie-swatch" style="background:${s.color}"></span>${s.label}</div>`).join('')}
+        </div>
+      </div>
+      <div class="field-hint" style="margin-top:8px;">Each slice is this combination's share of your daily target for that nutrient — larger slices are nutrients this combination contributes most of.</div>
+    `;
+  }
+  popover.classList.add('show');
+}
+
+function hideComboPie(cardEl){
+  const popover = cardEl.querySelector('.combo-pie-popover');
+  if(popover) popover.classList.remove('show');
 }
 
 // Best-effort relaxation when no feasible combination exists: minimize total
@@ -775,7 +1017,7 @@ function renderInfeasibleResults(names, targets, uls, calorieTarget){
       <p style="font-size:13px; color:var(--ink-soft); margin-bottom:20px;">For each nutrient you're still short on (below the 90% floor), foods from the full catalogue ranked highest-to-lowest by content per 100g. Disabled foods are excluded.</p>`;
     shortfalls.forEach(([k, gapAmt]) => {
       const nd = DRI.nutrients[k];
-      const ranked = [...FOODS].filter(f => f.enabled).sort((a,b) => (b[k]||0) - (a[k]||0)).slice(0, 8);
+      const ranked = [...FOODS].filter(f => f.enabled && !f.hiddenByVariant).sort((a,b) => (b[k]||0) - (a[k]||0)).slice(0, 8);
       const maxAmt = ranked.length ? (ranked[0][k] || 0) : 0;
       html += `<div class="missing-nutrient-block">
         <h4>${nd.label} <span style="font-weight:400; color:var(--ink-soft); font-size:12px;">— short by ${gapAmt.toFixed(1)} ${DISPLAY_UNIT[k]||''}</span></h4>
@@ -825,14 +1067,12 @@ function setCatalogueFilter(cat){
 function renderCatalogueTable(){
   const tbody = document.getElementById('catalogueTbody');
   const q = (document.getElementById('catalogueSearch').value || '').toLowerCase();
-  const simplified = state.simplifyCategories;
-  let list = simplified ? FOODS.slice() : FOODS.filter(f => state.catalogueFilter === 'all' || f.category === state.catalogueFilter);
+  let list = FOODS.filter(f => state.catalogueFilter === 'all' || f.category === state.catalogueFilter);
   if(q) list = list.filter(f => foodMatchesQuery(f, q));
-  const colspan = simplified ? 13 : 14;
   tbody.innerHTML = list.map(f => `
-    <tr class="${f.enabled ? '' : 'row-disabled'}">
-      <td onclick="openFoodModal('${escName(f.name)}')" style="cursor:pointer;"><strong>${f.name}</strong></td>
-      ${simplified ? '' : `<td>${f.category}</td>`}
+    <tr class="${f.enabled ? '' : 'row-disabled'} ${f.hiddenByVariant ? 'row-variant-hidden' : ''}">
+      <td onclick="openFoodModal('${escName(f.name)}')" style="cursor:pointer;"><strong>${f.name}</strong>${f.hiddenByVariant ? ' <span class="tag tag-nodata">simplified out</span>' : ''}</td>
+      <td>${f.category}</td>
       <td class="mono">${fmtVal(f.kcal)}</td>
       <td class="mono">${fmtVal(f.protein_g)}</td>
       <td class="mono">${fmtVal(f.carb_g)}</td>
@@ -846,21 +1086,29 @@ function renderCatalogueTable(){
       <td>${f.source_url ? `<a href="${f.source_url}" target="_blank" rel="noopener" onclick="event.stopPropagation()">USDA</a>` : '—'}</td>
       <td><input type="checkbox" ${f.enabled ? 'checked' : ''} onclick="event.stopPropagation()" onchange="toggleFoodEnabled('${escName(f.name)}', this.checked)"></td>
     </tr>
-  `).join('') || `<tr><td colspan="${colspan}" style="text-align:center; padding:30px; color:var(--ink-soft);">No foods match.</td></tr>`;
-
-  // category filter pills and the table's Category header are meaningless
-  // once categories are hidden from the row data -- toggle them together.
-  document.querySelectorAll('.cat-filter-btn[data-cat]').forEach(b => { b.hidden = simplified; });
-  const catHeader = document.getElementById('catalogueCategoryHeader');
-  if(catHeader) catHeader.hidden = simplified;
+  `).join('') || `<tr><td colspan="14" style="text-align:center; padding:30px; color:var(--ink-soft);">No foods match.</td></tr>`;
 }
 
-function onSimplifyCategoriesChange(checked){
-  state.simplifyCategories = checked;
-  if(checked) state.catalogueFilter = 'all';
+// "Simplify" collapses SIMPLIFY_GROUPS variants (e.g. chicken breast vs
+// thigh) down to one representative for the calculator/solver -- the other
+// variants stay visible in the catalogue (greyed out, tagged "simplified
+// out") but can't be selected. This does NOT affect genuinely distinct foods
+// (nuts, seeds, cheeses, fish species) -- see SIMPLIFY_GROUPS for the exact
+// curated list.
+function toggleSimplifyVariants(){
+  state.simplifyVariants = !state.simplifyVariants;
   saveState();
+  applyFoodOverrides();
+  renderSimplifyVariantsUI();
   renderCatalogueTable();
   renderFoodPicker();
+}
+
+function renderSimplifyVariantsUI(){
+  const btn = document.getElementById('simplifyVariantsBtn');
+  const hint = document.getElementById('simplifyVariantsHint');
+  if(btn) btn.classList.toggle('active', !!state.simplifyVariants);
+  if(hint) hint.style.display = state.simplifyVariants ? '' : 'none';
 }
 
 function toggleFoodEnabled(name, checked){
@@ -1158,10 +1406,12 @@ async function init(){
   document.getElementById('pWeight').value = state.profile.weight;
   document.getElementById('pHeight').value = state.profile.height;
   document.getElementById('pActivity').value = state.profile.activity;
-  document.getElementById('simplifyCategoriesToggle').checked = state.simplifyCategories;
+  renderSimplifyVariantsUI();
 
   renderFoodPicker();
   renderSelectedFoods();
+  renderCategoryLimitsList();
+  renderFoodLimitsList();
   renderLandingCatStrip();
   renderLandingStats();
   renderHeroCard();

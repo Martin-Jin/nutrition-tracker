@@ -15,7 +15,32 @@ catalogue, requirements, profile).
 Broad allowlist for this project — low-stakes personal tool, single user, no
 production deployment. Standard bash/git/gh read+write commands should not
 prompt per-call. Destructive/remote operations (force-push, `gh repo delete`,
-history rewrite) still confirm.
+history rewrite) still confirm — see the explicit `deny` list below.
+
+**Settings shape:** single file, `.claude/settings.json` (no
+`settings.local.json`) — this is a genuinely solo project with no CI running
+Claude Code against it, so there's no need to split a personal/broad mode out
+from a shared/reviewable one. `defaultMode` is `acceptEdits` (not
+`bypassPermissions`) with a broad `allow` list plus an explicit `deny` list
+covering force-push, hard reset, interactive rebase, history rewrite, `gh
+repo/release delete`, and `rm -rf` — this project intentionally keeps those
+denied rather than going fully permission-less. If a second contributor or
+any automated/CI use of Claude Code is ever added, split personal-only allow
+entries (and any move toward `bypassPermissions`) into a gitignored
+`settings.local.json` at that point.
+
+**One-time tool installs beyond `pip`/no-install-JS:** Playwright (used for
+in-browser console-error verification per the Testing section) needs its
+browser binary fetched separately from the npm package:
+`npx playwright install chromium`. This installs to a cache directory outside
+any `node_modules` here — a fresh clone or container needs to re-run it, `npm
+install` alone won't restore it. There's no `package.json` in this repo
+tracking `playwright` as a dependency; it's installed ad hoc into the
+scratchpad/temp working area per session, not into the project itself.
+
+**Gitignore:** `.claude/` (settings, skills, local session state) and
+`.env` are already gitignored (see `.gitignore`) — keep it that way. Nothing
+CLAUDE.md-adjacent should be tracked beyond this file itself.
 
 ## Model usage (token efficiency)
 
@@ -23,6 +48,12 @@ Default: mid-tier model (Sonnet) for the main session. No subagent tiering
 needed at this project's current size — it's a single-developer static app
 with a couple of Python data scripts, not a multi-agent workflow. If it grows
 enough to warrant delegation, decide tiers then rather than pre-provisioning.
+If tiering is introduced later, the one concrete danger zone in this codebase
+is the LP-solver math in `app/app.js` (`buildLPModel`, gram-limit/UL
+constraint wiring, solution-dedup threshold logic) — a wrong first pass there
+is expensive to unwind (silently wrong nutrient combinations, not a crash),
+so that's the one place worth the expensive tier over the default. Everything
+else here (rendering, catalogue/CRUD, data fetch scripts) is normal-tier work.
 
 ## Git workflow
 
@@ -38,7 +69,12 @@ enough to warrant delegation, decide tiers then rather than pre-provisioning.
 - Authorship: commits pushed on the user's behalf show the user as sole
   author — no co-author trailer unless asked.
 - Single-developer project — no concurrent-session worktree concerns
-  expected, but check `git status` before branching if that changes.
+  expected. If that ever changes (a second contributor, or two agent
+  sessions against this checkout at once), check `git worktree list` and
+  `git status` for unrecognized changes before branching, and create a
+  separate worktree (`git worktree add ../<name> -b <branch>`) rather than
+  branching in the shared directory — plain `git checkout` there would carry
+  another session's uncommitted changes along with it.
 
 ## Changelog / versioning
 
@@ -64,7 +100,9 @@ updating then). Until then, skip changelog upkeep.
 - Before changing `app/data/dri.json` or `app/data/food_catalogue.json`
   shape, check every place in `app/app.js` and `scripts/build_workbook.py`
   that reads those fields — both consume the same files and must stay in
-  sync.
+  sync (see Cross-cutting concerns below). This is the general rule for any
+  change to something with dependents in this repo, not just the data files:
+  check callers before changing a shared shape.
 - Deletions: move removed files to a `deleted/` folder mirroring their
   original path rather than `rm`, so a wrong removal is recoverable.
 
@@ -122,6 +160,9 @@ No automated test suite. Correctness bar per change:
 - Before declaring the solver "done," run the three cases from the build
   plan: a food set that should succeed, one that should fail, and a check
   that iodine/biotin never appear as a false shortfall.
+- If a check seems flaky rather than genuinely broken, re-run it up to three
+  times total before concluding either way — don't loop indefinitely
+  chasing a clean signal.
 
 ## Design direction
 

@@ -45,6 +45,7 @@ input,select{font-family:inherit;}
   padding:14px 28px;
 }
 .brand{display:flex; align-items:baseline; gap:10px; cursor:pointer;}
+.brand-logo{align-self:center; flex-shrink:0;}
 .brand-mark{font-family:'Fraunces', serif; font-weight:700; font-size:20px; color:var(--forest);}
 .brand-sub{font-size:11px; color:var(--ink-soft); font-family:'JetBrains Mono',monospace; letter-spacing:0.02em;}
 .navlinks{display:flex; gap:4px;}
@@ -201,6 +202,16 @@ input,select{font-family:inherit;}
 .result-block{margin-top:24px;}
 .combo-card{
   border:1px solid var(--line-strong); border-radius:var(--radius); padding:18px 20px; margin-bottom:14px; background:#fff;
+  position:relative;
+}
+.combo-pie-popover{
+  display:none; position:absolute; top:8px; right:8px; z-index:30; background:#fff;
+  border:1px solid var(--line-strong); border-radius:var(--radius); box-shadow:0 6px 20px rgba(0,0,0,0.14);
+  padding:16px; max-width:340px;
+}
+.combo-pie-popover.show{display:block;}
+@media (max-width:640px){
+  .combo-pie-popover{position:static; margin-top:14px; max-width:none; box-shadow:none;}
 }
 .combo-card.status-full{border-left:4px solid var(--ok);}
 .combo-card.status-partial{border-left:4px solid var(--warn);}
@@ -308,6 +319,7 @@ table.data-table th{
 table.data-table td{padding:8px 10px; border-bottom:1px solid var(--line); white-space:nowrap;}
 table.data-table tr:hover td{background:var(--paper-dim);}
 table.data-table tr.row-disabled td{opacity:0.45;}
+table.data-table tr.row-variant-hidden td{opacity:0.5; font-style:italic;}
 .table-scroll{overflow-x:auto; border:1px solid var(--line-strong); border-radius:var(--radius); max-height:600px; overflow-y:auto;}
 
 .food-detail-modal-bg{

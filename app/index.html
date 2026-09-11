@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Harvest Ledger — Personal Nutrition Planner</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cg fill='none' stroke='%231F3A2E' stroke-width='2.4' stroke-linecap='round'%3E%3Cline x1='16' y1='30' x2='16' y2='15'/%3E%3Cpath d='M16 20 C 11 18, 8 13, 7 4'/%3E%3Cpath d='M16 20 C 21 18, 24 13, 25 4'/%3E%3Cpath d='M16 16 C 12.5 14.5, 10.5 10, 10 3'/%3E%3Cpath d='M16 16 C 19.5 14.5, 21.5 10, 22 3'/%3E%3Cpath d='M16 13 C 14 12, 13 9, 13 3'/%3E%3Cpath d='M16 13 C 18 12, 19 9, 19 3'/%3E%3Cpath d='M12 24 L20 24' stroke='%23C89B3C' stroke-width='2.6'/%3E%3C/g%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Public+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
@@ -12,6 +13,18 @@
 
 <nav class="topnav">
   <div class="brand" onclick="showView('landing')">
+    <svg class="brand-logo" viewBox="0 0 32 32" width="26" height="26" aria-hidden="true">
+      <g fill="none" stroke="var(--forest)" stroke-width="1.8" stroke-linecap="round">
+        <line x1="16" y1="30" x2="16" y2="15"/>
+        <path d="M16 20 C 11 18, 8 13, 7 4"/>
+        <path d="M16 20 C 21 18, 24 13, 25 4"/>
+        <path d="M16 16 C 12.5 14.5, 10.5 10, 10 3"/>
+        <path d="M16 16 C 19.5 14.5, 21.5 10, 22 3"/>
+        <path d="M16 13 C 14 12, 13 9, 13 3"/>
+        <path d="M16 13 C 18 12, 19 9, 19 3"/>
+        <path d="M12 24 L20 24" stroke="var(--gold)" stroke-width="2"/>
+      </g>
+    </svg>
     <span class="brand-mark">Harvest Ledger</span>
     <span class="brand-sub">NUTRIENT PLANNER</span>
   </div>
@@ -123,6 +136,7 @@
 
   <div class="calc-tabs">
     <button class="calc-tab active" data-calctab="select" onclick="setCalcTab('select')">Select foods</button>
+    <button class="calc-tab" data-calctab="settings" onclick="setCalcTab('settings')">Settings</button>
     <button class="calc-tab" data-calctab="results" onclick="setCalcTab('results')">Results</button>
   </div>
 
@@ -149,6 +163,20 @@
     </div>
   </div>
 
+  <div class="calc-tabpanel" id="calcTabSettings">
+    <div class="panel">
+      <h3>Serving limits by category</h3>
+      <p class="field-hint" style="margin:-8px 0 16px;">Sets the maximum grams of EACH food in a category that a combination can use (e.g. 150g caps every individual vegetable at 150g, not the vegetable total). Leave blank for no limit. Applies to every food in the category unless manually overridden below.</p>
+      <div id="categoryLimitsList"></div>
+    </div>
+    <div class="panel">
+      <h3>Manual per-food overrides</h3>
+      <p class="field-hint" style="margin:-8px 0 16px;">Overrides the category limit above for one specific food. Leave blank to fall back to the category default.</p>
+      <input type="text" class="food-search" id="foodLimitSearch" placeholder="Search foods to override…" oninput="renderFoodLimitsList()">
+      <div id="foodLimitsList"></div>
+    </div>
+  </div>
+
   <div class="calc-tabpanel" id="calcTabResults">
     <div id="resultsPanel" class="result-block"></div>
   </div>
@@ -172,14 +200,14 @@
     <button class="cat-filter-btn" data-cat="Fruits" onclick="setCatalogueFilter('Fruits')">Fruits</button>
     <button class="cat-filter-btn" data-cat="Nuts" onclick="setCatalogueFilter('Nuts')">Nuts</button>
     <span style="flex:1 1 auto;"></span>
+    <button class="cat-filter-btn cat-filter-action" id="simplifyVariantsBtn" onclick="toggleSimplifyVariants()">Simplify</button>
     <button class="cat-filter-btn cat-filter-action" onclick="enableAllFoods()">Enable all</button>
     <button class="cat-filter-btn cat-filter-action" onclick="openAddFoodModal()">+ Add custom food</button>
   </div>
 
-  <label class="settings-toggle-row">
-    <input type="checkbox" id="simplifyCategoriesToggle" onchange="onSimplifyCategoriesChange(this.checked)">
-    <span>Simplify: show one flat food list instead of grouping by Meats / Vegetables / Fruits / Nuts</span>
-  </label>
+  <div class="field-hint" id="simplifyVariantsHint" style="margin-bottom:16px; display:none;">
+    Simplify is on: for foods that are really the same product at different cuts/preparations (e.g. chicken breast vs thigh), only the most common variant is usable in the calculator — the others are greyed out below and excluded from the solver. Distinct foods (e.g. almonds vs walnuts) are never merged.
+  </div>
 
   <div class="table-scroll">
     <table class="data-table" id="catalogueTable">
