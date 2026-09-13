@@ -1047,6 +1047,20 @@ function buildCoverageModel(names, targets, uls, calorieTarget){
   // while other nutrients stay at zero -- each nutrient can contribute at
   // most 1 to the sum, so the solver is pushed toward covering all of them,
   // not just the cheapest one. Ceiling (max_) constraints stay in place.
+  //
+  // cov_<key> alone gives literally zero objective credit for going past the
+  // floor, so once a nutrient reaches 100% of its floor the solver has no
+  // reason to push it further -- it reallocates grams elsewhere even when
+  // overshoot would've been free (nothing else was competing for those
+  // grams). That made unrelated, easily-covered nutrients flatline at
+  // exactly floor_pct% and look artificially capped. over_<key> is a second,
+  // unbounded-above variable fed by the same link_<key> total, weighted at
+  // OVERSHOOT_WEIGHT (small relative to 1.0 per nutrient-at-floor, so a
+  // shortfall on one nutrient always outweighs padding an already-met one --
+  // this must never let "pad the easy nutrients" outbid "fix the worst
+  // shortfall") so any slack the solver would otherwise waste still buys a
+  // little extra headroom on nutrients that can afford it.
+  const OVERSHOOT_WEIGHT = 0.01;
   Object.keys(model.constraints).forEach(cKey => {
     if(cKey.startsWith('min_')) delete model.constraints[cKey].min;
   });
@@ -1056,10 +1070,11 @@ function buildCoverageModel(names, targets, uls, calorieTarget){
     if(target === null || target === undefined) return;
     const floor = target * (resolveNutrientBuffer(key).floor_pct / 100);
     if(!floor) return;
-    // link_<key>: (per-gram contribution summed over foods) - floor*cov_<key> = 0,
-    // i.e. cov_<key> = actual/floor once solved -- expressed as an equality
-    // constraint so the solver can freely trade grams against the bounded
-    // cov_<key> variable instead of cov_<key> being computed after the fact.
+    // link_<key>: (per-gram contribution summed over foods) - floor*cov_<key> - floor*over_<key> = 0,
+    // i.e. cov_<key>+over_<key> = actual/floor once solved -- expressed as an
+    // equality constraint so the solver can freely trade grams against the
+    // bounded cov_<key>/unbounded over_<key> variables instead of computing
+    // them after the fact.
     model.constraints[`link_${key}`] = { equal: 0 };
     names.forEach(name => {
       const food = FOODS.find(f => f.name === name);
@@ -1071,6 +1086,10 @@ function buildCoverageModel(names, targets, uls, calorieTarget){
       [`link_${key}`]: -floor,
       [`cov_ub_${key}`]: 1,
       coverage_obj: 1,
+    };
+    model.variables[`over_${key}`] = {
+      [`link_${key}`]: -floor,
+      coverage_obj: OVERSHOOT_WEIGHT,
     };
   });
 
