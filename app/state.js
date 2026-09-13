@@ -39,6 +39,8 @@ let state = {
   simplifyVariants: false, // when true, only one representative per SIMPLIFY_GROUPS entry is usable; other variants in the group are hidden from the calculator
   categoryGramLimits: {}, // category name -> max grams per food in that category (solver upper bound); undefined = unbounded
   foodGramLimits: {},     // food name -> max grams, overrides the category default for that one food
+  categoryTotalLimits: {}, // category name -> max combined grams across every food in that category together (independent of categoryGramLimits, which caps each food individually)
+  foodGramFloors: {},     // food name -> min grams a food must be used at if included at all (0 if unused) -- MIP semi-continuous constraint, see buildLPModel
   nutrientBufferOverrides: {}, // nutrient key -> { floor_pct, ceiling_pct }, overrides dri.json's shipped default for that nutrient
 };
 
@@ -97,6 +99,8 @@ function saveState(){
       simplifyVariants: state.simplifyVariants,
       categoryGramLimits: state.categoryGramLimits,
       foodGramLimits: state.foodGramLimits,
+      categoryTotalLimits: state.categoryTotalLimits,
+      foodGramFloors: state.foodGramFloors,
       nutrientBufferOverrides: state.nutrientBufferOverrides,
     };
     localStorage.setItem(LS_KEY, JSON.stringify(toSave));
@@ -119,6 +123,8 @@ function loadState(){
     if(typeof parsed.simplifyVariants === 'boolean') state.simplifyVariants = parsed.simplifyVariants;
     if(parsed.categoryGramLimits) state.categoryGramLimits = parsed.categoryGramLimits;
     if(parsed.foodGramLimits) state.foodGramLimits = parsed.foodGramLimits;
+    if(parsed.categoryTotalLimits) state.categoryTotalLimits = parsed.categoryTotalLimits;
+    if(parsed.foodGramFloors) state.foodGramFloors = parsed.foodGramFloors;
     if(parsed.nutrientBufferOverrides) state.nutrientBufferOverrides = parsed.nutrientBufferOverrides;
   }catch(e){
     console.warn('localStorage load failed', e);
@@ -163,6 +169,19 @@ function resolveGramLimit(food){
   return null;
 }
 
+// Resolves the minimum grams a food must be used at if the solver includes
+// it at all (0g if it's not used) -- e.g. a 10g floor rules out a solution
+// that technically satisfies every nutrient band but does so with 0.3g of
+// some food, which isn't a realistic serving. Per-food only (no category
+// default, unlike resolveGramLimit) since a sensible minimum serving size is
+// specific to each food, not shared across a whole category.
+function resolveGramFloor(food){
+  const override = state.foodGramFloors[food.name];
+  if(override === undefined || override === null || override === '') return null;
+  const n = parseFloat(override);
+  return (isNaN(n) || n <= 0) ? null : n;
+}
+
 // Resolves the floor/ceiling percent band the solver should enforce for one
 // nutrient: a user override (set in the Settings tab) always wins; otherwise
 // dri.json's shipped default (see each nutrient's floor_pct/ceiling_pct and,
@@ -180,10 +199,15 @@ function resolveNutrientBuffer(key){
   return { floor_pct: isNaN(floor_pct) ? (nd.floor_pct ?? 90) : floor_pct, ceiling_pct: (ceiling_pct !== null && isNaN(ceiling_pct)) ? (nd.ceiling_pct ?? null) : ceiling_pct };
 }
 
+// Cache-busting query param, bumped whenever data/*.json changes -- without
+// it a browser (or GitHub Pages' CDN) can keep serving a stale cached copy
+// after a data fix ships, same problem app.js?v= already guards against.
+const DATA_VERSION = '5e0a0dc';
+
 async function loadData(){
   const [foods, dri] = await Promise.all([
-    fetch('data/food_catalogue.json').then(r => r.json()),
-    fetch('data/dri.json').then(r => r.json()),
+    fetch(`data/food_catalogue.json?v=${DATA_VERSION}`).then(r => r.json()),
+    fetch(`data/dri.json?v=${DATA_VERSION}`).then(r => r.json()),
   ]);
   window.__RAW_FOODS__ = foods;
   DRI = dri;

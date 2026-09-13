@@ -170,8 +170,13 @@
       <div id="categoryLimitsList"></div>
     </div>
     <div class="panel">
+      <h3>Category total limit</h3>
+      <p class="field-hint" style="margin:-8px 0 16px;">Sets the maximum COMBINED grams across every food in a category together (e.g. 400g on Meats means all meats used in a combination must add up to 400g or less, however that's split between them). Independent of the per-food limit above — both apply together when both are set.</p>
+      <div id="categoryTotalLimitsList"></div>
+    </div>
+    <div class="panel">
       <h3>Manual per-food overrides</h3>
-      <p class="field-hint" style="margin:-8px 0 16px;">Overrides the category limit above for one specific food. Leave blank to fall back to the category default.</p>
+      <p class="field-hint" style="margin:-8px 0 16px;">Max overrides the category limit above for one specific food (blank = fall back to the category default). Min if used sets the smallest amount of that food a combination is allowed to include — a food is either left out entirely (0g) or used at at least this many grams, ruling out unrealistic amounts like 0.3g of something (blank = no minimum).</p>
       <input type="text" class="food-search" id="foodLimitSearch" placeholder="Search foods to override…" oninput="renderFoodLimitsList()">
       <div id="foodLimitsList"></div>
     </div>

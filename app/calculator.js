@@ -36,6 +36,22 @@ function buildLPModel(selectedNames, targets, uls, objectiveType, calorieTarget)
     constraints.max_kcal = { max: calorieTarget * 1.1 };
   }
 
+  // Category-total gram cap: unlike the per-food cap below (which bounds
+  // each food's own variable independently), this is one shared constraint
+  // that every food in the category contributes 1 gram-per-gram to -- e.g.
+  // "Meats" at 400g means the combined grams of every meat used together
+  // must stay under 400g, not that each individual meat gets its own 400g
+  // allowance. Only added for categories actually present among the
+  // selected foods, and only when a limit is set.
+  const binaries = {};
+  let hasFloors = false;
+
+  Object.keys(state.categoryTotalLimits).forEach(cat => {
+    const limit = parseFloat(state.categoryTotalLimits[cat]);
+    if(isNaN(limit) || limit <= 0) return;
+    constraints[`cat_total_${cat}`] = { max: limit };
+  });
+
   selectedNames.forEach(name => {
     const food = FOODS.find(f => f.name === name);
     const varDef = { total_grams: 1 };
@@ -65,7 +81,36 @@ function buildLPModel(selectedNames, targets, uls, objectiveType, calorieTarget)
       varDef[capKey] = 1;
       constraints[capKey] = { max: gramLimit };
     }
+    const catTotalKey = `cat_total_${food.category}`;
+    if(constraints[catTotalKey]){
+      varDef[catTotalKey] = 1;
+    }
     variables[name] = varDef;
+  });
+
+  // Per-food gram floor: "either 0g (unused) or >= floor grams" is not a
+  // plain linear bound (it's a disjunction), so it needs a binary indicator
+  // per floored food -- use_<name> in {0,1} -- with two linked constraints:
+  // grams <= BIG_M * use (forces use=1 whenever grams>0, since BIG_M is far
+  // above any realistic serving) and grams >= floor * use (forces grams up
+  // to the floor once use=1; use=0 forces grams to exactly 0 via the same
+  // constraint). Only foods with a floor actually set get a binary -- most
+  // won't, keeping the MIP small since branch-and-bound cost scales with the
+  // binary count, not the food count.
+  const BIG_M = 100000; // grams; far above any real serving, just needs to be "unreachable"
+  selectedNames.forEach(name => {
+    const food = FOODS.find(f => f.name === name);
+    const floor = resolveGramFloor(food);
+    if(floor === null) return;
+    hasFloors = true;
+    const useKey = `use_${name}`;
+    binaries[useKey] = 1;
+    constraints[`floor_ub_${name}`] = { max: 0 };
+    variables[name][`floor_ub_${name}`] = 1;
+    variables[useKey] = { [`floor_ub_${name}`]: -BIG_M };
+    constraints[`floor_lb_${name}`] = { min: 0 };
+    variables[name][`floor_lb_${name}`] = 1;
+    variables[useKey][`floor_lb_${name}`] = -floor;
   });
 
   const model = {
@@ -74,8 +119,23 @@ function buildLPModel(selectedNames, targets, uls, objectiveType, calorieTarget)
     constraints,
     variables,
   };
+  if(hasFloors){
+    model.binaries = binaries;
+    // MIP branch-and-bound with this library can hang far longer than a
+    // plain LP solve, and this app runs many solves per calculation (several
+    // objectives, subset drops, best-effort fallback) -- a single slow solve
+    // multiplies into the whole calculation stalling the tab. model.timeout
+    // (ms) makes the solver return its best solution found so far (or
+    // report timeout) instead of running unbounded; MIP_SOLVE_TIMEOUT_MS is
+    // deliberately short since this runs many times per calculation, not
+    // once. See resolveGramFloor's caller for the food-count cap that keeps
+    // this from being reached in the first place under normal use.
+    model.timeout = MIP_SOLVE_TIMEOUT_MS;
+  }
   return model;
 }
+
+const MIP_SOLVE_TIMEOUT_MS = 3000;
 
 function computeTotalsFromUsage(usage){
   const totals = {}; TRACKABLE_KEYS.forEach(k => totals[k]=0); totals.kcal = 0;
@@ -116,7 +176,7 @@ function setCalcTab(tab){
   document.getElementById('calcTabSelect').classList.toggle('active', tab === 'select');
   document.getElementById('calcTabSettings').classList.toggle('active', tab === 'settings');
   document.getElementById('calcTabResults').classList.toggle('active', tab === 'results');
-  if(tab === 'settings'){ renderCategoryLimitsList(); renderFoodLimitsList(); renderNutrientBufferList(); }
+  if(tab === 'settings'){ renderCategoryLimitsList(); renderCategoryTotalLimitsList(); renderFoodLimitsList(); renderNutrientBufferList(); }
 }
 
 // ============================================================================
@@ -145,6 +205,34 @@ function onCategoryLimitChange(category, value){
   saveState();
 }
 
+// Separate from renderCategoryLimitsList above: that one caps each
+// individual food in a category, this caps the category's combined total
+// across every food used from it together (e.g. 400g of Meats total, however
+// it's split between chicken/beef/fish). The two limits are independent and
+// both apply together when both are set.
+function renderCategoryTotalLimitsList(){
+  const container = document.getElementById('categoryTotalLimitsList');
+  if(!container) return;
+  const catsPresent = GRAM_LIMIT_CATEGORIES.filter(cat => FOODS.some(f => f.category === cat));
+  container.innerHTML = catsPresent.map(cat => {
+    const val = state.categoryTotalLimits[cat];
+    return `<div class="field-row">
+      <label>${cat}</label>
+      <div>
+        <input type="number" min="0" step="any" placeholder="no limit" value="${val ?? ''}"
+          onchange="onCategoryTotalLimitChange('${escName(cat)}', this.value)">
+        <div class="field-hint">combined grams across all foods in this category, per day</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function onCategoryTotalLimitChange(category, value){
+  if(value === ''){ delete state.categoryTotalLimits[category]; }
+  else { state.categoryTotalLimits[category] = value; }
+  saveState();
+}
+
 function renderFoodLimitsList(){
   const container = document.getElementById('foodLimitsList');
   if(!container) return;
@@ -158,11 +246,16 @@ function renderFoodLimitsList(){
     const override = state.foodGramLimits[f.name];
     const catDefault = state.categoryGramLimits[f.category];
     const placeholder = (catDefault !== undefined && catDefault !== null && catDefault !== '') ? `category: ${catDefault}g` : 'no limit';
+    const floorVal = state.foodGramFloors[f.name];
     return `<div class="field-row">
       <label>${f.name} <span class="field-hint" style="display:block;">${f.category}</span></label>
-      <div>
+      <div style="display:flex; gap:8px; align-items:center;">
         <input type="number" min="0" step="any" placeholder="${placeholder}" value="${override ?? ''}"
-          onchange="onFoodLimitChange('${escName(f.name)}', this.value)">
+          style="width:110px;" title="Max grams" onchange="onFoodLimitChange('${escName(f.name)}', this.value)">
+        <span class="field-hint">max</span>
+        <input type="number" min="0" step="any" placeholder="no min" value="${floorVal ?? ''}"
+          style="width:90px;" title="Min grams if used" onchange="onFoodFloorChange('${escName(f.name)}', this.value)">
+        <span class="field-hint">min if used</span>
       </div>
     </div>`;
   }).join('');
@@ -171,6 +264,12 @@ function renderFoodLimitsList(){
 function onFoodLimitChange(name, value){
   if(value === ''){ delete state.foodGramLimits[name]; }
   else { state.foodGramLimits[name] = value; }
+  saveState();
+}
+
+function onFoodFloorChange(name, value){
+  if(value === ''){ delete state.foodGramFloors[name]; }
+  else { state.foodGramFloors[name] = value; }
   saveState();
 }
 
@@ -342,41 +441,103 @@ function renderSuccessResults(solutions, targets, uls, calorieTarget){
   });
   panel.innerHTML = html;
   window.__lastSolutions = solutions;
+  window.__lastCalorieTarget = calorieTarget;
 }
 
-// Nutrient-composition pie shown on hover over a combination card: each
-// TRACKABLE_KEYS nutrient's share of that combination's total, normalized to
-// the DRI daily target so nutrients of very different units (mg vs µg vs g)
-// are still comparable slices of "how much of today's need this combo
-// covers." Built lazily on hover rather than for every card up front --
-// there can be several combinations, and most are never hovered.
+// Group colors/order for the hover pie -- 4 wedges (Calories, Macros,
+// Minerals, Vitamins) rather than one slice per nutrient. A flat 30-slice
+// pie was unreadable (slivers too thin to see or click); grouping by
+// dri.json's existing category field (nd.category: macro/mineral/vitamin,
+// same field the requirements table already tags rows with) gives a chart
+// that's actually legible at a glance, with the individual nutrient
+// percentages still available below as a normal list per group.
+const PIE_GROUPS = [
+  { key: 'calories', label: 'Calories', color: '#5B4E9E' },
+  { key: 'macro', label: 'Macros', color: '#1F3A2E' },
+  { key: 'mineral', label: 'Minerals', color: '#A8462F' },
+  { key: 'vitamin', label: 'Vitamins', color: '#C89B3C' },
+];
+
+// Nutrient-composition pie shown on hover over a combination card. Each
+// wedge is one of PIE_GROUPS, sized by the SUM of have/target across every
+// nutrient in that group -- e.g. a group covering 400% of target combined
+// across its members gets a wedge twice the size of a group covering 200%.
+// This is deliberately NOT raw mass (summing grams+mg+µg directly would let
+// macros' gram-scale values swamp minerals/vitamins' mg/µg-scale ones,
+// making the vitamin wedge an invisible sliver regardless of actual
+// coverage) -- summing each nutrient's own target-fraction first keeps
+// groups comparable despite using different units.
+//
+// This popover is also the ONLY place per-nutrient percentages are shown --
+// the long flat per-combination bar list that used to sit below every card
+// (one row per tracked nutrient, ~30 rows) was removed as redundant once
+// this existed; nutrients are now listed under their group heading instead
+// of one undifferentiated list.
 function showComboPie(cardEl, idx, isBestEffort){
   const source = isBestEffort ? window.__lastBestEffortCombos : window.__lastSolutions;
   const sol = source && source[idx];
   if(!sol) return;
   const targets = isBestEffort ? window.__lastBestEffortTargets : getTargets().targets;
-  const slices = [];
-  const palette = ['#1F3A2E','#A8462F','#C89B3C','#5B4E9E','#2E7D4F','#B4772A','#5B5748','#2E5442','#C25A3F','#8C7A3C'];
-  let colorIdx = 0;
+  const uls = isBestEffort ? window.__lastBestEffortUls : getTargets().uls;
+  const calorieTarget = window.__lastCalorieTarget;
+
+  const groups = {};
+  PIE_GROUPS.forEach(g => { groups[g.key] = { ...g, sum: 0, rows: [] }; });
+
+  if(calorieTarget){
+    const have = sol.totals.kcal || 0;
+    const pct = Math.min(999, Math.round((have/calorieTarget)*100));
+    const cls = pct > 110 ? 'over' : (pct >= 90 ? '' : 'under');
+    groups.calories.sum += have/calorieTarget;
+    groups.calories.rows.push({ label: 'Calories', pct, cls });
+  }
   TRACKABLE_KEYS.forEach(key => {
     const target = targets[key];
+    if(target === null || target === undefined) return;
+    const nd = DRI.nutrients[key];
+    const group = groups[nd.category];
+    if(!group) return; // dri.json category outside macro/mineral/vitamin -- nothing to file it under
     const have = sol.totals[key] || 0;
-    if(!target || have <= 0) return;
-    slices.push({ label: DRI.nutrients[key].label, value: have / target, color: palette[colorIdx++ % palette.length] });
+    const { floor_pct, ceiling_pct } = resolveNutrientBuffer(key);
+    const ceil = uls && uls[key] !== undefined ? uls[key] : (ceiling_pct ? target*(ceiling_pct/100) : null);
+    const pct = Math.min(999, Math.round((have/target)*100));
+    const over = ceil !== null && have > ceil + 1e-9;
+    const cls = over ? 'over' : (pct >= floor_pct ? '' : 'under');
+    group.sum += have/target;
+    group.rows.push({ label: nd.label, pct, cls });
   });
+
+  const activeGroups = PIE_GROUPS.map(g => groups[g.key]).filter(g => g.rows.length > 0);
+  const slices = activeGroups.filter(g => g.sum > 0).map(g => ({ label: g.label, value: g.sum, color: g.color }));
+
   const popover = cardEl.querySelector('.combo-pie-popover');
   if(!popover) return;
-  if(slices.length === 0){
+  if(activeGroups.length === 0){
     popover.innerHTML = '<div class="field-hint">No nutrient data to chart.</div>';
   } else {
     popover.innerHTML = `
       <div class="pie-chart-row">
-        ${svgPieChart(slices, { size: 150 })}
+        ${svgPieChart(slices, { size: 130 })}
         <div class="pie-legend">
-          ${slices.map(s => `<div class="pie-legend-row"><span class="pie-swatch" style="background:${s.color}"></span>${s.label}</div>`).join('')}
+          ${activeGroups.map(g => `<div class="pie-legend-row">
+            <span class="pie-swatch" style="background:${g.color}"></span>
+            <span class="pie-legend-label">${g.label}</span>
+            <span class="pie-legend-pct-val">${Math.round((g.sum / g.rows.length) * 100)}%</span>
+          </div>`).join('')}
         </div>
       </div>
-      <div class="field-hint" style="margin-top:8px;">Each slice is this combination's share of your daily target for that nutrient — larger slices are nutrients this combination contributes most of.</div>
+      <div class="pie-group-detail">
+        ${activeGroups.map(g => `
+          <div class="pie-group-block">
+            <h5 style="color:${g.color}">${g.label} — ${Math.round((g.sum / g.rows.length) * 100)}% avg of target</h5>
+            ${g.rows.map(r => `<div class="pie-legend-row">
+              <span class="pie-legend-label">${r.label}</span>
+              <span class="pie-legend-pct-val ${r.cls}">${r.pct}%</span>
+            </div>`).join('')}
+          </div>
+        `).join('')}
+      </div>
+      <div class="field-hint" style="margin-top:8px;">Each wedge's size is the summed share of daily target across that group's nutrients — the list below breaks it down nutrient by nutrient.</div>
     `;
   }
   popover.classList.add('show');
@@ -480,8 +641,21 @@ function solveCoverageUsage(names, targets, uls, calorieTarget){
   const model = buildCoverageModel(names, targets, uls, calorieTarget);
   let result;
   try{ result = window.solver.Solve(model); }catch(e){ result = null; }
+  // A MIP solve (gram floors are active) can report feasible:false while
+  // still populating variable values from an incomplete/invalid relaxation
+  // -- observed as absurd negative or huge gram amounts (e.g. -35685g
+  // potatoes) once branch-and-bound hits model.timeout without confirming a
+  // valid integral solution. Those values are garbage, not a real usage --
+  // treat an infeasible/failed result as "use nothing" rather than trusting
+  // whatever numbers came back, same as the main solver path already does
+  // (see the result.feasible checks in runCalculation above).
+  if(!result || !result.feasible){
+    const empty = {};
+    names.forEach(name => { empty[name] = 0; });
+    return empty;
+  }
   const usage = {};
-  names.forEach(name => { usage[name] = (result && result[name]) || 0; });
+  names.forEach(name => { usage[name] = result[name] || 0; });
   return usage;
 }
 
@@ -581,8 +755,7 @@ function renderInfeasibleResults(names, targets, uls, calorieTarget){
     </div>`;
 
   combos.forEach((combo, idx) => {
-    const { usage, totals } = combo;
-    const gaps = computeGaps(totals, targets, uls);
+    const { usage } = combo;
     const items = Object.entries(usage).filter(([,g]) => g > 0.5);
     const maxGrams = Math.max(...items.map(([,g]) => g), 1);
     const pctLabel = `${Math.round(combo.coverage * 100)}% average coverage`;
@@ -606,37 +779,14 @@ function renderInfeasibleResults(names, targets, uls, calorieTarget){
       </div>`;
     }
 
-    html += `<div style="margin-top:12px;">`;
-    if(calorieTarget){
-      const havekcal = totals.kcal || 0;
-      const pctKcal = Math.min(999, Math.round((havekcal/calorieTarget)*100));
-      const barClassKcal = pctKcal > 110 ? 'over' : (pctKcal >= 90 ? '' : 'under');
-      html += `<div class="nutrient-bar-row">
-        <div class="nutrient-bar-label">Calories</div>
-        <div class="nutrient-bar-track"><div class="nutrient-bar-fill ${barClassKcal}" style="width:${Math.min(100,pctKcal)}%"></div></div>
-        <div class="nutrient-bar-pct">${pctKcal}%</div>
-      </div>`;
-    }
-    TRACKABLE_KEYS.forEach(k => {
-      const target = targets[k];
-      if(target === null || target === undefined) return;
-      const have = totals[k] || 0;
-      const pct = Math.min(999, Math.round((have/target)*100));
-      const over = gaps[k] !== undefined && gaps[k] < 0;
-      const barClass = over ? 'over' : (pct >= resolveNutrientBuffer(k).floor_pct ? '' : 'under');
-      html += `<div class="nutrient-bar-row">
-        <div class="nutrient-bar-label">${DRI.nutrients[k].label}</div>
-        <div class="nutrient-bar-track"><div class="nutrient-bar-fill ${barClass}" style="width:${Math.min(100,pct)}%"></div></div>
-        <div class="nutrient-bar-pct">${pct}%</div>
-      </div>`;
-    });
-    html += `</div>
-      <div class="combo-pie-popover"></div>
+    html += `<div class="combo-pie-popover"></div>
     </div>`;
   });
 
   window.__lastBestEffortCombos = combos;
   window.__lastBestEffortTargets = targets;
+  window.__lastBestEffortUls = uls;
+  window.__lastCalorieTarget = calorieTarget;
 
   // Gap-filling suggestions below are based on the single closest (top-
   // ranked) combination -- showing "foods ranked by missing nutrient" for
