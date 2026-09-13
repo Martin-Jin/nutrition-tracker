@@ -93,7 +93,11 @@ FOOD_QUERIES = [
     ("Nuts", "flaxseed raw", "Seeds, flaxseed"),
 
     # ---- Grains ----
-    ("Grains", "white rice cooked", "Rice, white, long-grain, regular, cooked"),
+    # Preferred substring intentionally omits "with salt" -- SR Legacy's
+    # generic "Rice, white, long-grain, regular, cooked" search otherwise
+    # matches the salted variant (382mg sodium/100g) instead of the unsalted,
+    # enriched one (1mg sodium/100g) most users actually cook.
+    ("Grains", "white rice cooked", "Rice, white, long-grain, regular, enriched, cooked"),
     ("Grains", "brown rice cooked", "Rice, brown, long-grain, cooked"),
     ("Grains", "white bread", "Bread, white, commercially prepared"),
     ("Grains", "whole wheat bread", "Bread, whole-wheat, commercially prepared"),
