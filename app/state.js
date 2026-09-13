@@ -109,26 +109,112 @@ function saveState(){
   }
 }
 
+// Shared by loadState (reads from localStorage) and importSettings (reads
+// from a user-picked file) -- both need the exact same defensive
+// field-by-field merge so a partial/older export still loads whatever
+// fields it has instead of wiping the rest of state back to defaults.
+function applyStateFields(parsed){
+  if(parsed.profile) state.profile = Object.assign(state.profile, parsed.profile);
+  if(parsed.selectedFoods) state.selectedFoods = parsed.selectedFoods;
+  if(parsed.overrides) state.overrides = parsed.overrides;
+  if(parsed.disabledFoods) state.disabledFoods = parsed.disabledFoods;
+  if(parsed.customFoods) state.customFoods = parsed.customFoods;
+  if(parsed.editedFoods) state.editedFoods = parsed.editedFoods;
+  if(typeof parsed.simplifyVariants === 'boolean') state.simplifyVariants = parsed.simplifyVariants;
+  if(parsed.categoryGramLimits) state.categoryGramLimits = parsed.categoryGramLimits;
+  if(parsed.foodGramLimits) state.foodGramLimits = parsed.foodGramLimits;
+  if(parsed.categoryTotalLimits) state.categoryTotalLimits = parsed.categoryTotalLimits;
+  if(parsed.foodGramFloors) state.foodGramFloors = parsed.foodGramFloors;
+  if(parsed.nutrientBufferOverrides) state.nutrientBufferOverrides = parsed.nutrientBufferOverrides;
+}
+
 function loadState(){
   try{
     const raw = localStorage.getItem(LS_KEY);
     if(!raw) return;
-    const parsed = JSON.parse(raw);
-    if(parsed.profile) state.profile = Object.assign(state.profile, parsed.profile);
-    if(parsed.selectedFoods) state.selectedFoods = parsed.selectedFoods;
-    if(parsed.overrides) state.overrides = parsed.overrides;
-    if(parsed.disabledFoods) state.disabledFoods = parsed.disabledFoods;
-    if(parsed.customFoods) state.customFoods = parsed.customFoods;
-    if(parsed.editedFoods) state.editedFoods = parsed.editedFoods;
-    if(typeof parsed.simplifyVariants === 'boolean') state.simplifyVariants = parsed.simplifyVariants;
-    if(parsed.categoryGramLimits) state.categoryGramLimits = parsed.categoryGramLimits;
-    if(parsed.foodGramLimits) state.foodGramLimits = parsed.foodGramLimits;
-    if(parsed.categoryTotalLimits) state.categoryTotalLimits = parsed.categoryTotalLimits;
-    if(parsed.foodGramFloors) state.foodGramFloors = parsed.foodGramFloors;
-    if(parsed.nutrientBufferOverrides) state.nutrientBufferOverrides = parsed.nutrientBufferOverrides;
+    applyStateFields(JSON.parse(raw));
   }catch(e){
     console.warn('localStorage load failed', e);
   }
+}
+
+// Downloads the same payload saveState() writes to localStorage as a JSON
+// file -- lets a user back up or move their profile/limits/overrides
+// between browsers, and gives a plain-text dump of current settings for
+// debugging without opening devtools.
+function exportSettings(){
+  const toSave = {
+    profile: state.profile,
+    selectedFoods: state.selectedFoods,
+    overrides: state.overrides,
+    disabledFoods: state.disabledFoods,
+    customFoods: state.customFoods,
+    editedFoods: state.editedFoods,
+    simplifyVariants: state.simplifyVariants,
+    categoryGramLimits: state.categoryGramLimits,
+    foodGramLimits: state.foodGramLimits,
+    categoryTotalLimits: state.categoryTotalLimits,
+    foodGramFloors: state.foodGramFloors,
+    nutrientBufferOverrides: state.nutrientBufferOverrides,
+  };
+  const blob = new Blob([JSON.stringify(toSave, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const stamp = new Date().toISOString().slice(0,10);
+  a.href = url;
+  a.download = `harvest-ledger-settings-${stamp}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  showToast('Settings exported');
+}
+
+function triggerImportSettings(){
+  document.getElementById('importSettingsFile').click();
+}
+
+// Wired to the hidden file input's onchange -- reads the picked file,
+// merges it into state via the same field-by-field logic loadState uses,
+// then re-renders every view that reads state so the import is visible
+// immediately without requiring a page reload.
+function importSettingsFile(input){
+  const file = input.files && input.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try{
+      const parsed = JSON.parse(reader.result);
+      applyStateFields(parsed);
+      saveState();
+      applyFoodOverrides();
+      document.getElementById('pAge').value = state.profile.age;
+      document.getElementById('pSex').value = state.profile.sex;
+      document.getElementById('pWeight').value = state.profile.weight;
+      document.getElementById('pHeight').value = state.profile.height;
+      document.getElementById('pActivity').value = state.profile.activity;
+      renderSimplifyVariantsUI();
+      renderFoodPicker();
+      renderSelectedFoods();
+      renderCategoryLimitsList();
+      renderCategoryTotalLimitsList();
+      renderFoodLimitsList();
+      renderNutrientBufferList();
+      renderProfileMatch();
+      renderHeroCard();
+      renderMacroPie();
+      renderLandingCatStrip();
+      renderLandingStats();
+      if(document.getElementById('catalogue').classList.contains('active')) renderCatalogueTable();
+      if(document.getElementById('requirements').classList.contains('active')) renderRequirementsTable();
+      showToast('Settings imported');
+    }catch(e){
+      showToast('Could not read that file — not valid settings JSON', { error: true });
+      console.warn('importSettingsFile failed', e);
+    }
+    input.value = ''; // allow re-importing the same filename later
+  };
+  reader.readAsText(file);
 }
 
 // ============================================================================

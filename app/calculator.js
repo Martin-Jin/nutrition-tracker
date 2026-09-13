@@ -420,7 +420,7 @@ function renderSuccessResults(solutions, targets, uls, calorieTarget){
     const items = Object.entries(sol.usage).filter(([,g]) => g > 0.5);
     const maxGrams = Math.max(...items.map(([,g]) => g), 1);
     const badgeLabel = calorieTarget ? 'meets all targets, incl. calories (90%–110% band)' : 'meets all targets (90%–110% band)';
-    html += `<div class="combo-card status-full" onmouseenter="showComboPie(this, ${idx})" onmouseleave="hideComboPie(this)">
+    html += `<div class="combo-card status-full">
       <div class="combo-title">
         <span>Combination ${idx+1}</span>
         <span class="combo-badge badge-full">${badgeLabel}</span>
@@ -435,8 +435,10 @@ function renderSuccessResults(solutions, targets, uls, calorieTarget){
           </div>`;
         }).join('')}
       </div>
-      <div style="margin-top:12px; font-size:12px; color:var(--ink-soft);">Total: ${Math.round(sol.totals.kcal)} kcal${calorieTarget ? ` (target ${Math.round(calorieTarget)} kcal)` : ''}</div>
-      <div class="combo-pie-popover"></div>
+      <div style="margin-top:12px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+        <span style="font-size:12px; color:var(--ink-soft);">Total: ${Math.round(sol.totals.kcal)} kcal${calorieTarget ? ` (target ${Math.round(calorieTarget)} kcal)` : ''}</span>
+        <button class="btn btn-secondary btn-sm" onclick="openComboPieModal(${idx})">View nutrient breakdown</button>
+      </div>
     </div>`;
   });
   panel.innerHTML = html;
@@ -458,29 +460,20 @@ const PIE_GROUPS = [
   { key: 'vitamin', label: 'Vitamins', color: '#C89B3C' },
 ];
 
-// Nutrient-composition pie shown on hover over a combination card. Each
-// wedge is one of PIE_GROUPS, sized by the SUM of have/target across every
-// nutrient in that group -- e.g. a group covering 400% of target combined
-// across its members gets a wedge twice the size of a group covering 200%.
-// This is deliberately NOT raw mass (summing grams+mg+µg directly would let
-// macros' gram-scale values swamp minerals/vitamins' mg/µg-scale ones,
-// making the vitamin wedge an invisible sliver regardless of actual
-// coverage) -- summing each nutrient's own target-fraction first keeps
-// groups comparable despite using different units.
-//
-// This popover is also the ONLY place per-nutrient percentages are shown --
-// the long flat per-combination bar list that used to sit below every card
-// (one row per tracked nutrient, ~30 rows) was removed as redundant once
-// this existed; nutrients are now listed under their group heading instead
-// of one undifferentiated list.
-function showComboPie(cardEl, idx, isBestEffort){
-  const source = isBestEffort ? window.__lastBestEffortCombos : window.__lastSolutions;
-  const sol = source && source[idx];
-  if(!sol) return;
-  const targets = isBestEffort ? window.__lastBestEffortTargets : getTargets().targets;
-  const uls = isBestEffort ? window.__lastBestEffortUls : getTargets().uls;
-  const calorieTarget = window.__lastCalorieTarget;
-
+// Computes the 4 PIE_GROUPS (Calories/Macros/Minerals/Vitamins) for one
+// combination: each group's summed target-fraction (used for pie wedge
+// size -- deliberately NOT raw mass, since summing grams+mg+µg directly
+// would let macros' gram-scale values swamp minerals/vitamins' mg/µg-scale
+// ones, making the vitamin wedge an invisible sliver regardless of actual
+// coverage) plus a met-target count/percentage per group. The met
+// percentage is a COUNT of nutrients within their own floor/ceiling band
+// (cls === ''), not an average of raw percentages -- an average would let
+// one nutrient's huge overshoot (e.g. copper at 180%, an easy nutrient to
+// overshoot) drag the group figure up even while several others in the same
+// group sit under target, which reads as misleadingly reassuring. This
+// answers "how many of this group's nutrients are actually OK," not "what's
+// the average percentage."
+function computePieGroups(sol, targets, uls, calorieTarget){
   const groups = {};
   PIE_GROUPS.forEach(g => { groups[g.key] = { ...g, sum: 0, rows: [] }; });
 
@@ -507,45 +500,96 @@ function showComboPie(cardEl, idx, isBestEffort){
     group.rows.push({ label: nd.label, pct, cls });
   });
 
-  const activeGroups = PIE_GROUPS.map(g => groups[g.key]).filter(g => g.rows.length > 0);
-  const slices = activeGroups.filter(g => g.sum > 0).map(g => ({ label: g.label, value: g.sum, color: g.color }));
+  PIE_GROUPS.forEach(g => {
+    const group = groups[g.key];
+    const metCount = group.rows.filter(r => r.cls === '').length;
+    group.metCount = metCount;
+    group.metPct = group.rows.length ? Math.round((metCount / group.rows.length) * 100) : 0;
+  });
 
-  const popover = cardEl.querySelector('.combo-pie-popover');
-  if(!popover) return;
-  if(activeGroups.length === 0){
-    popover.innerHTML = '<div class="field-hint">No nutrient data to chart.</div>';
-  } else {
-    popover.innerHTML = `
-      <div class="pie-chart-row">
-        ${svgPieChart(slices, { size: 130 })}
-        <div class="pie-legend">
-          ${activeGroups.map(g => `<div class="pie-legend-row">
-            <span class="pie-swatch" style="background:${g.color}"></span>
-            <span class="pie-legend-label">${g.label}</span>
-            <span class="pie-legend-pct-val">${Math.round((g.sum / g.rows.length) * 100)}%</span>
-          </div>`).join('')}
-        </div>
-      </div>
-      <div class="pie-group-detail">
-        ${activeGroups.map(g => `
-          <div class="pie-group-block">
-            <h5 style="color:${g.color}">${g.label} — ${Math.round((g.sum / g.rows.length) * 100)}% avg of target</h5>
-            ${g.rows.map(r => `<div class="pie-legend-row">
-              <span class="pie-legend-label">${r.label}</span>
-              <span class="pie-legend-pct-val ${r.cls}">${r.pct}%</span>
-            </div>`).join('')}
-          </div>
-        `).join('')}
-      </div>
-      <div class="field-hint" style="margin-top:8px;">Each wedge's size is the summed share of daily target across that group's nutrients — the list below breaks it down nutrient by nutrient.</div>
-    `;
-  }
-  popover.classList.add('show');
+  return PIE_GROUPS.map(g => groups[g.key]).filter(g => g.rows.length > 0);
 }
 
-function hideComboPie(cardEl){
-  const popover = cardEl.querySelector('.combo-pie-popover');
-  if(popover) popover.classList.remove('show');
+// Opens the nutrient-breakdown modal for one combination -- click-triggered
+// (a "View nutrient breakdown" button on the card), not hover, so it works
+// the same on touch devices and doesn't disappear the moment the pointer
+// moves. Reuses the food-detail modal's dimmed-backdrop/centered-card
+// styling (food-detail-modal-bg/food-detail-modal) rather than introducing
+// a second modal look. Shows the pie + one summary row per group; each row
+// has its own "Details" button that drills into openPieGroupDetail for that
+// group's full per-nutrient list.
+function openComboPieModal(idx, isBestEffort){
+  const source = isBestEffort ? window.__lastBestEffortCombos : window.__lastSolutions;
+  const sol = source && source[idx];
+  if(!sol) return;
+  window.__pieModalIdx = idx;
+  window.__pieModalIsBestEffort = !!isBestEffort;
+
+  const targets = isBestEffort ? window.__lastBestEffortTargets : getTargets().targets;
+  const uls = isBestEffort ? window.__lastBestEffortUls : getTargets().uls;
+  const calorieTarget = window.__lastCalorieTarget;
+  const activeGroups = computePieGroups(sol, targets, uls, calorieTarget);
+  const slices = activeGroups.filter(g => g.sum > 0).map(g => ({ label: g.label, value: g.sum, color: g.color }));
+
+  const content = document.getElementById('pieModalContent');
+  if(activeGroups.length === 0){
+    content.innerHTML = `<button class="modal-close" onclick="closePieModal()" aria-label="Close">✕</button>
+      <div class="field-hint">No nutrient data to chart.</div>`;
+  } else {
+    content.innerHTML = `
+      <button class="modal-close" onclick="closePieModal()" aria-label="Close">✕</button>
+      <h3>Combination ${idx+1} — nutrient breakdown</h3>
+      <div class="pie-chart-row pie-chart-row-centered">
+        ${svgPieChart(slices, { size: 160 })}
+      </div>
+      <div class="pie-legend">
+        ${activeGroups.map((g, gi) => `<div class="pie-legend-row">
+          <span class="pie-swatch" style="background:${g.color}"></span>
+          <span class="pie-legend-label">${g.label}</span>
+          <span class="pie-legend-pct-val">${g.metPct}%</span>
+          <button class="btn btn-secondary btn-sm" style="margin-left:8px;" onclick="openPieGroupDetail(${gi})">Details</button>
+        </div>`).join('')}
+      </div>
+      <div class="field-hint" style="margin-top:8px;">The pie wedge size reflects summed share of daily target across each group's nutrients (so a few nutrients far over target still show as a bigger wedge); the percentage next to each group instead counts how many of its nutrients actually land within their own target band. Open a group's Details for the individual nutrients.</div>
+    `;
+  }
+  document.getElementById('pieModalBg').classList.add('show');
+}
+
+// Drill-down view for one group's individual nutrient percentages, reached
+// via a group's Details button in openComboPieModal. gi indexes into that
+// same activeGroups array, recomputed here rather than stored, since the
+// combination/targets/uls needed to rebuild it are already cheap to re-fetch
+// from the same window.__pieModal* state openComboPieModal just set.
+function openPieGroupDetail(gi){
+  const idx = window.__pieModalIdx;
+  const isBestEffort = window.__pieModalIsBestEffort;
+  const source = isBestEffort ? window.__lastBestEffortCombos : window.__lastSolutions;
+  const sol = source && source[idx];
+  if(!sol) return;
+  const targets = isBestEffort ? window.__lastBestEffortTargets : getTargets().targets;
+  const uls = isBestEffort ? window.__lastBestEffortUls : getTargets().uls;
+  const calorieTarget = window.__lastCalorieTarget;
+  const activeGroups = computePieGroups(sol, targets, uls, calorieTarget);
+  const g = activeGroups[gi];
+  if(!g) return;
+
+  const content = document.getElementById('pieModalContent');
+  content.innerHTML = `
+    <button class="modal-close" onclick="closePieModal()" aria-label="Close">✕</button>
+    <button class="btn btn-secondary btn-sm" onclick="openComboPieModal(${idx}, ${isBestEffort})" style="margin-bottom:14px;">← Back</button>
+    <h3 style="color:${g.color}">${g.label} — ${g.metCount}/${g.rows.length} met target (${g.metPct}%)</h3>
+    <div class="pie-group-detail" style="margin-top:0; padding-top:0; border-top:none;">
+      ${g.rows.map(r => `<div class="pie-legend-row">
+        <span class="pie-legend-label">${r.label}</span>
+        <span class="pie-legend-pct-val ${r.cls}">${r.pct}%</span>
+      </div>`).join('')}
+    </div>
+  `;
+}
+
+function closePieModal(){
+  document.getElementById('pieModalBg').classList.remove('show');
 }
 
 // Best-effort relaxation when no feasible combination exists: maximize
@@ -751,7 +795,7 @@ function renderInfeasibleResults(names, targets, uls, calorieTarget){
 
   let html = `<h3 style="margin-bottom:6px;">No combination meets all your daily targets — closest ${combos.length > 1 ? `${combos.length} combinations` : 'combination'} by coverage</h3>
     <div style="font-size:13px; color:var(--ink-soft); margin-bottom:14px;">
-      Ranked by average coverage across all tracked nutrients (each nutrient's own floor/ceiling — see Settings for the buffer used, or the published upper limit where one exists). Hover a combination to see its own nutrient breakdown.
+      Ranked by average coverage across all tracked nutrients (each nutrient's own floor/ceiling — see Settings for the buffer used, or the published upper limit where one exists). Open a combination's nutrient breakdown below for the details.
     </div>`;
 
   combos.forEach((combo, idx) => {
@@ -760,7 +804,7 @@ function renderInfeasibleResults(names, targets, uls, calorieTarget){
     const maxGrams = Math.max(...items.map(([,g]) => g), 1);
     const pctLabel = `${Math.round(combo.coverage * 100)}% average coverage`;
 
-    html += `<div class="combo-card status-partial" onmouseenter="showComboPie(this, ${idx}, true)" onmouseleave="hideComboPie(this)">
+    html += `<div class="combo-card status-partial">
       <div class="combo-title">
         <span>Combination ${idx+1}</span>
         <span class="combo-badge badge-partial">${pctLabel}</span>
@@ -779,7 +823,9 @@ function renderInfeasibleResults(names, targets, uls, calorieTarget){
       </div>`;
     }
 
-    html += `<div class="combo-pie-popover"></div>
+    html += `<div style="margin-top:12px; text-align:right;">
+        <button class="btn btn-secondary btn-sm" onclick="openComboPieModal(${idx}, true)">View nutrient breakdown</button>
+      </div>
     </div>`;
   });
 

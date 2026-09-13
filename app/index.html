@@ -165,6 +165,15 @@
 
   <div class="calc-tabpanel" id="calcTabSettings">
     <div class="panel">
+      <h3>Export / import settings</h3>
+      <p class="field-hint" style="margin:-8px 0 16px;">Saves everything below — profile, selected foods, serving limits, nutrient buffers, custom/edited/disabled foods — to a JSON file you can back up or move to another browser. Import replaces matching fields with whatever the file contains; anything not in the file is left as-is.</p>
+      <div style="display:flex; gap:10px; flex-wrap:wrap;">
+        <button class="btn btn-secondary btn-sm" onclick="exportSettings()">Export settings…</button>
+        <button class="btn btn-secondary btn-sm" onclick="triggerImportSettings()">Import settings…</button>
+        <input type="file" id="importSettingsFile" accept="application/json,.json" style="display:none;" onchange="importSettingsFile(this)">
+      </div>
+    </div>
+    <div class="panel">
       <h3>Serving limits by category</h3>
       <p class="field-hint" style="margin:-8px 0 16px;">Sets the maximum grams of EACH food in a category that a combination can use (e.g. 150g caps every individual vegetable at 150g, not the vegetable total). Leave blank for no limit. Applies to every food in the category unless manually overridden below.</p>
       <div id="categoryLimitsList"></div>
@@ -194,6 +203,10 @@
   </div>
 </div>
 
+<div class="food-detail-modal-bg" id="pieModalBg" onclick="if(event.target===this) closePieModal()">
+  <div class="food-detail-modal" id="pieModalContent"></div>
+</div>
+
 <!-- ================= CATALOGUE ================= -->
 <div id="catalogue" class="view">
   <div class="page-head">
@@ -221,12 +234,13 @@
     Simplify is on: for foods that are really the same product at different cuts/preparations (e.g. chicken breast vs thigh), only the most common variant is usable in the calculator — the others are greyed out below and excluded from the solver. Distinct foods (e.g. almonds vs walnuts) are never merged.
   </div>
 
+  <div class="field-hint" style="margin-bottom:10px;"><strong>All nutrient columns below are per 100g of the food</strong>, not per serving — e.g. "Calcium 15mg" means 15mg per 100g of that food, however much of it you actually use.</div>
   <div class="table-scroll">
     <table class="data-table" id="catalogueTable">
       <thead>
         <tr>
-          <th>Food</th><th id="catalogueCategoryHeader">Category</th><th>kcal</th><th>Protein g</th><th>Carb g</th><th>Fiber g</th><th>Fat g</th>
-          <th>Calcium mg</th><th>Iron mg</th><th>Potassium mg</th><th>Vit C mg</th><th>Vit A µg</th><th>Source</th><th>Enabled</th>
+          <th>Food</th><th id="catalogueCategoryHeader">Category</th><th>kcal /100g</th><th>Protein g/100g</th><th>Carb g/100g</th><th>Fiber g/100g</th><th>Fat g/100g</th>
+          <th>Calcium mg/100g</th><th>Iron mg/100g</th><th>Potassium mg/100g</th><th>Vit C mg/100g</th><th>Vit A µg/100g</th><th>Source</th><th>Enabled</th>
         </tr>
       </thead>
       <tbody id="catalogueTbody"></tbody>

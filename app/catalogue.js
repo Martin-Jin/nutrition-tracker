@@ -217,6 +217,9 @@ document.addEventListener('keydown', (e) => {
   if(e.key === 'Escape' && document.getElementById('foodModalBg').classList.contains('show')){
     closeFoodModal();
   }
+  if(e.key === 'Escape' && document.getElementById('pieModalBg').classList.contains('show')){
+    closePieModal();
+  }
 });
 
 // ---- food detail modal: view, edit, disable, source link ----
